@@ -34,6 +34,7 @@ export interface ChatCompletionJson {
   choices: {
     finish_reason: "stop" | "length" | "tool_calls" | "content_filter";
     index: number;
+    logprobs: null;
     message: {
       content: string | null;
       reasoning_content?: string;
@@ -45,6 +46,7 @@ export interface ChatCompletionJson {
   id: string;
   model: string;
   object: "chat.completion";
+  system_fingerprint: string;
   usage?: ChatCompletionUsage;
 }
 
@@ -114,6 +116,7 @@ export function translateResponse(input: {
           toolCalls.length > 0,
         ),
         index: 0,
+        logprobs: null,
         message: {
           content,
           role: "assistant",
@@ -128,9 +131,14 @@ export function translateResponse(input: {
     id: input.id,
     model: input.modelLabel,
     object: "chat.completion",
+    system_fingerprint: SYSTEM_FINGERPRINT,
     usage,
   };
 }
+
+// Stable per-process fingerprint so caching clients see a consistent value.
+// OpenAI shape is `fp_<hex>`.
+const SYSTEM_FINGERPRINT = `fp_pi_${randomBytes(8).toString("hex")}`;
 
 export function mapUsage(usage: Usage): ChatCompletionUsage {
   const prompt = usage.input ?? 0;
@@ -347,6 +355,7 @@ function makeChunk(
   const choice: Record<string, unknown> = {
     delta,
     index: 0,
+    logprobs: null,
   };
   choice.finish_reason = extras.finish_reason ?? null;
   const payload: Record<string, unknown> = {
@@ -355,6 +364,7 @@ function makeChunk(
     id: init.id,
     model: init.modelLabel,
     object: "chat.completion.chunk",
+    system_fingerprint: SYSTEM_FINGERPRINT,
   };
   if (extras.usage) payload.usage = extras.usage;
   return payload;
