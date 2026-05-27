@@ -1,0 +1,51 @@
+# pi-gateway
+
+> OpenAI-compatible local API on top of [pi.dev](https://github.com/badlogic/pi-mono). LiteLLM-shape stateless protocol translator that re-exposes every model pi can reach (Anthropic, OpenAI, Google, Mistral, plus OAuth subscriptions like Claude Pro / ChatGPT Codex / GitHub Copilot / Gemini CLI) via `POST /v1/chat/completions` and `GET /v1/models`.
+
+## Package
+
+- npm: https://www.npmjs.com/package/pi-gateway
+- Source: https://github.com/bntvllnt/pi-gateway
+- License: MIT
+
+## Install
+
+```bash
+# Standalone (no pi required)
+pnpm dlx pi-gateway --port 4000
+
+# Pi extension (auto-installed via ~/.pi/agent/settings.json)
+# Add "git:git@github.com:bntvllnt/pi-gateway" to the `packages` array
+# Then inside pi:  /gateway:start
+```
+
+## Endpoints
+
+- `GET  /healthz`               liveness
+- `GET  /v1/models`             OpenAI-compat models list (`id: "provider/model-id"`)
+- `POST /v1/chat/completions`   stream + non-stream Chat Completions
+
+## Wiring an OpenAI-compat client
+
+Base URL: `http://127.0.0.1:4000/v1` · API key: any non-empty string on loopback.
+
+Works with: Open WebUI, LibreChat, LiteLLM consumers, Cursor (Override OpenAI Base URL), Continue.dev, Cline.
+
+## Architecture (non-goals)
+
+- No pi `AgentSession` is created — pure HTTP frontend.
+- No system prompt, tools, or skills are injected by pi-gateway.
+- No tool *execution* — tools are forwarded; clients execute and post `role: "tool"` results.
+- No conversation state — each request is independent.
+
+## Key docs
+
+- [README](https://github.com/bntvllnt/pi-gateway/blob/main/README.md) — install + usage + wiring examples
+- [CLAUDE.md](https://github.com/bntvllnt/pi-gateway/blob/main/CLAUDE.md) — project rules + contract guarantees + security defaults
+- [llms-full.txt](https://github.com/bntvllnt/pi-gateway/blob/main/llms-full.txt) — full detail for AI consumption
+- [schemas/openresponses.openapi.json](https://github.com/bntvllnt/pi-gateway/blob/main/schemas/openresponses.openapi.json) — pinned OpenAPI spec (openresponses.org v2.3.0)
+
+## Tested with
+
+- gpt-5.4 via `openai-codex` OAuth subscription (ChatGPT Plus/Pro)
+- Schema-validated against OpenAI Chat Completions reference + the pinned OpenAPI doc via ajv (see `tests/contract.mjs`)

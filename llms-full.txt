@@ -1,0 +1,490 @@
+# pi-gateway — full reference
+
+This document is a complete, self-contained reference for AI consumption. It mirrors `CLAUDE.md` plus the README, with every endpoint, every schema rule, every security default, every config knob, and every architectural pattern.
+
+---
+
+## Identity
+
+| Field | Value |
+|-------|-------|
+| Name | `pi-gateway` |
+| Type | OpenAI-compatible HTTP frontend on top of `pi.dev` |
+| Shape | LiteLLM-style stateless protocol translator |
+| License | MIT |
+| npm | https://www.npmjs.com/package/pi-gateway |
+| Source | https://github.com/bntvllnt/pi-gateway |
+| Author | https://github.com/bntvllnt |
+
+## Goals
+
+1. Re-expose every model `pi-coding-agent`'s `ModelRegistry` can reach (Anthropic, OpenAI, Google, Mistral, Groq, Cerebras, xAI, OpenRouter, Bedrock, Vertex, Azure OpenAI Responses, ZAI, MiniMax, Hugging Face, plus OAuth subscriptions: Claude Pro/Max, ChatGPT Plus/Pro Codex, GitHub Copilot, Gemini CLI, Antigravity) via the canonical OpenAI Chat Completions wire format.
+2. Work from any client that supports a custom OpenAI base URL: Open WebUI, LibreChat, LiteLLM consumers, Cursor (Override OpenAI Base URL), Continue.dev, Cline, Aider, ChatGPT-Next-Web, BetterChatGPT, Lobe Chat.
+3. Reuse pi's auth (`~/.pi/agent/auth.json` resolved via `AuthStorage` + `ModelRegistry`) so users authenticate once.
+4. Run two ways from one repo: **standalone CLI** (`pi-gateway --port 4000`) and **pi-extension** (slash commands inside `pi`).
+
+## Non-goals (do NOT add)
+
+1. No pi `AgentSession` is created at any point.
+2. No system prompt, tools, or skills are injected by pi-gateway.
+3. No tool *execution* — `tools`/`tool_choice` are forwarded; the client executes and posts `role: "tool"` results.
+4. No conversation state — each `POST /v1/chat/completions` is independent.
+5. No in-process TLS — front with Caddy / Tailscale Funnel / ngrok.
+6. No `--api-key` CLI flag — argv leaks via `/proc/<pid>/cmdline` + `ps aux`.
+
+## Install
+
+### Standalone
+
+```bash
+pnpm dlx pi-gateway --port 4000
+# or
+npm i -g pi-gateway && pi-gateway --port 4000
+```
+
+### Pi extension (auto-installs into pi runtime)
+
+Add to `~/.pi/agent/settings.json`:
+
+```jsonc
+{
+  "packages": [
+    // ...
+    "git:git@github.com:bntvllnt/pi-gateway"
+  ]
+}
+```
+
+Restart `pi`. The extension auto-clones to `~/.pi/agent/git/github.com/bntvllnt/pi-gateway/` and registers slash commands, LLM-callable tools, and a footer widget.
+
+Inside pi:
+
+```
+/gateway:start    # spawn the daemon (detached, survives pi exit)
+/gateway:status   # show url + pid + model count
+/gateway:stop     # SIGTERM
+```
+
+## CLI flags (standalone)
+
+| Flag | Default | Notes |
+|------|---------|-------|
+| `--port N` | `4000` | `0` = OS-assigned |
+| `--bind HOST` | `127.0.0.1` | Non-loopback requires `apiKey` in config file (NOT a CLI flag) |
+| `--config PATH` | — | Extra JSON layered after `~/.pi/agent/gateway.json` |
+| `--auth-dir PATH` | `~/.pi/agent` | Where to find `auth.json` and `models.json` |
+| `--allow-origin ORIGIN` | empty | Repeatable; `"*"` = any |
+| `--log-level LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
+| `--model-allowlist ID` | — | Repeatable; matches `provider/model-id` or bare id |
+| `--model-denylist ID` | — | Repeatable |
+| `--expose-oauth-subscriptions` | loopback default-on | Expose OAuth subscriptions on non-loopback too |
+| `--no-expose-oauth-subscriptions` | — | Hide OAuth subscriptions even on loopback |
+| `--require-key-on-loopback` | off | Force bearer auth on `127.0.0.1` |
+| `--version` | — | Print version + exit |
+| `--help` | — | Show help |
+
+Subcommands:
+
+| Command | Description |
+|---------|-------------|
+| `pi-gateway` | Run the daemon foreground |
+| `pi-gateway models` | Print available models then exit |
+
+## Config file: `~/.pi/agent/gateway.json`
+
+```jsonc
+{
+  "port": 4000,
+  "bindAddress": "127.0.0.1",
+  "apiKey": "long-random-string",        // ONLY place a key can live; argv is refused
+  "allowedOrigins": ["http://localhost:5173"],
+  "requireKeyOnLoopback": false,
+  "exposeOAuthSubscriptions": true,      // on loopback this is the safe default
+  "modelAllowlist": null,                 // null = expose all
+  "modelDenylist": null,
+  "logLevel": "info",
+  "heartbeatIntervalMs": 15000,
+  "forceAbortTimeoutMs": 5000
+}
+```
+
+Resolution precedence (high → low): **CLI flags > `PI_GATEWAY_*` env vars > `--config PATH` > `~/.pi/agent/gateway.json` > built-in defaults**.
+
+## Env vars
+
+| Var | Purpose |
+|-----|---------|
+| `PI_GATEWAY_PORT` | Port |
+| `PI_GATEWAY_BIND` | Bind address |
+| `PI_GATEWAY_API_KEY` | Bearer token (allowed via env; **not** via CLI flag) |
+| `PI_GATEWAY_AUTH_DIR` | Auth dir |
+| `PI_GATEWAY_LOG_LEVEL` | Log level |
+| `PI_GATEWAY_EXPOSE_OAUTH` | `true`/`false` |
+
+## Endpoints
+
+### `GET /healthz`
+
+```json
+{ "ok": true, "uptimeMs": 1234 }
+```
+
+### `GET /v1/models`
+
+```json
+{
+  "object": "list",
+  "data": [
+    { "id": "openai-codex/gpt-5.4", "object": "model", "created": 1779893681, "owned_by": "openai-codex" },
+    ...
+  ]
+}
+```
+
+Rules:
+
+- `id` is always `provider/model-id` (Open WebUI / LiteLLM / OpenRouter convention).
+- Sort is stable (alphabetic by `id`).
+- OAuth subscriptions default-allow on loopback; default-deny on non-loopback unless `--expose-oauth-subscriptions` or `exposeOAuthSubscriptions: true`.
+- `created` is a stable per-process timestamp.
+- `allowlist`/`denylist` are applied.
+
+### `POST /v1/chat/completions`
+
+#### Request (subset of OpenAI Chat Completions)
+
+Accepted fields: `model` (required), `messages` (required), `stream`, `stream_options`, `temperature`, `top_p`, `max_tokens`, `max_completion_tokens`, `stop`, `presence_penalty`, `frequency_penalty`, `response_format`, `seed`, `user`, `tools`, `tool_choice`, `n` (must be 1).
+
+`messages[].role`: `system` | `developer` | `user` | `assistant` | `tool` (Chat Completions shape).
+
+#### Non-stream response
+
+```json
+{
+  "id": "chatcmpl-<hex>",
+  "object": "chat.completion",
+  "created": 1779894353,
+  "model": "openai-codex/gpt-5.4",
+  "system_fingerprint": "fp_pi_<hex>",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "...",
+        "reasoning_content": "..."  // optional, only for reasoning models
+      },
+      "finish_reason": "stop",
+      "logprobs": null
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 27,
+    "completion_tokens": 10,
+    "total_tokens": 37
+  }
+}
+```
+
+#### Stream chunks (`Content-Type: text/event-stream`)
+
+Headers:
+
+```
+Content-Type:        text/event-stream; charset=utf-8
+Cache-Control:       no-cache, no-transform
+Connection:          keep-alive
+X-Accel-Buffering:   no
+```
+
+Frames:
+
+```
+data: {"id":"chatcmpl-...","object":"chat.completion.chunk","created":...,"model":"...","system_fingerprint":"...","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null,"logprobs":null}]}
+
+data: {"id":"chatcmpl-...","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null,"logprobs":null}]}
+
+...
+
+data: {"id":"chatcmpl-...","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop","logprobs":null}],"usage":{"prompt_tokens":...,"completion_tokens":...,"total_tokens":...}}
+
+data: [DONE]
+
+```
+
+Invariants:
+
+- Single `chatcmpl-<id>` reused across **every** chunk and matches the non-stream `id` shape.
+- First chunk's delta has `role: "assistant"`.
+- Subsequent text chunks have `delta.content` (string).
+- Thinking content (Claude 3.7+, codex reasoning) → `delta.reasoning_content` (OpenRouter/Ollama convention). **Never** in non-stream `content` (which is a string).
+- Tool calls → `delta.tool_calls[].function.arguments` is a **JSON string** (NEVER an object).
+- Final chunk carries `finish_reason` + (if `stream_options.include_usage`) the usage block.
+- Terminator: `data: [DONE]\n\n`.
+- Heartbeat: `: heartbeat\n\n` every 15s during silent periods (Claude extended thinking).
+
+#### Mid-stream errors
+
+OpenAI convention: emit one error frame then close. **No trailing `[DONE]`** (would signal normal completion).
+
+```
+data: {"error":{"type":"upstream_error","code":"provider_error","message":"..."}}
+
+(connection close)
+```
+
+Status codes:
+
+| HTTP | When |
+|------|------|
+| `200` | Successful Chat Completions |
+| `400` | Invalid JSON, schema mismatch, image part on non-image model, unsupported `response_format` |
+| `401` | Missing/invalid bearer (non-loopback or `requireKeyOnLoopback: true`); no credentials for the resolved provider |
+| `403` | OAuth-subscription model requested on non-loopback without `--expose-oauth-subscriptions` |
+| `404` | Unknown model id; unknown route |
+| `499` | Client disconnected (non-stream) |
+| `502` | Upstream provider errored (pi-ai returned `stopReason: "error"`) |
+
+Error envelope:
+
+```json
+{
+  "error": {
+    "type": "<error type>",
+    "code": "<machine code>",
+    "message": "<human message>",
+    "param": "<optional field name>"
+  }
+}
+```
+
+## Stop-reason mapping
+
+| pi-ai `stopReason` | OpenAI `finish_reason` | HTTP status |
+|-------------------|------------------------|-------------|
+| `stop` | `stop` | 200 |
+| `length` | `length` | 200 |
+| `toolUse` | `tool_calls` | 200 |
+| `error` (non-stream) | — | **502** with error envelope |
+| `error` (stream, after deltas) | — | mid-stream error frame, no `[DONE]` |
+| `aborted` (non-stream) | — | **499** |
+| `aborted` (stream) | — | abort signal propagates, stream ends |
+
+## Usage block mapping
+
+| pi-ai `Usage` field | OpenAI `usage` field |
+|---------------------|----------------------|
+| `input` | `prompt_tokens` |
+| `output` | `completion_tokens` |
+| `input + output` | `total_tokens` |
+
+## Multi-block content rules
+
+Claude 3.7+ assistant messages contain both `thinking` and `text` content blocks. OpenAI `choices[].message.content` is a string. pi-gateway merges as follows:
+
+- Thinking blocks: **dropped** from non-stream `content`; surfaced **only** during streaming as `delta.reasoning_content`.
+- Text blocks: concatenated with `\n\n` if multiple.
+
+## Tool-calling translation
+
+Outbound (pi-ai → OpenAI):
+
+- pi-ai `ToolCall.arguments` (object) → `function.arguments` (JSON string via `JSON.stringify`)
+- pi-ai `id` → OpenAI `id`
+- pi-ai `name` → OpenAI `function.name`
+
+Inbound (OpenAI → pi-ai), for follow-up `role: "tool"` messages:
+
+- OpenAI carries only `tool_call_id`; pi-ai's `ToolResultMessage` requires `toolName`.
+- Recovered by scanning the messages array for the preceding `assistant.tool_calls[].id → function.name`.
+- Stateless per-request lookup; never session state.
+
+## Model id resolution
+
+Accepted forms:
+
+| Form | Behavior |
+|------|----------|
+| `provider/model-id` | Exact lookup via `ModelRegistry.find(provider, modelId)` |
+| `model-id` | First available match across all providers (with disambiguation by load order) |
+| `provider/model-id:thinking` | Treated as `provider/model-id` (thinking level handled by pi-ai) |
+
+Unknown id → HTTP 404 `model_not_found`.
+
+## Security defaults
+
+- **Default bind**: `127.0.0.1`. Implementation asserts `server.address().address` matches resolved host after `listening` event (Node's `listen(port)` default is `0.0.0.0`).
+- **Non-loopback** bind requires `apiKey` in config file; refused if `apiKey` is missing.
+- **`--api-key` CLI flag** is refused (argv leak). Use config file or `PI_GATEWAY_API_KEY` env var.
+- **PID lockfile** at `~/.pi/agent/gateway.pid`, atomic `fs.openSync(path, "wx")` (`O_CREAT|O_EXCL`). On EEXIST probes liveness with `process.kill(pid, 0)`; stale → unlink + retry once.
+- **SIGINT/SIGTERM** handlers registered BEFORE `listen()`. Abort in-flight pi-ai streams via `AbortSignal`. Allow up to `forceAbortTimeoutMs` (5s default) for sockets to flush.
+- **Log redaction**: hardcoded allowlist for safe headers (`content-type`, `content-length`, `user-agent`, `accept`, `accept-encoding`, `host`). Everything else (including `authorization`, anything matching `*token*` / `*key*` / `*secret*`) is omitted.
+- **CORS**: empty `allowedOrigins` by default = no Access-Control-Allow-Origin header. Add origins explicitly (`"*"` allowed).
+- **OAuth subscriptions**: default-allow on loopback; default-deny on non-loopback unless `--expose-oauth-subscriptions`.
+
+## Source-of-truth schema
+
+`schemas/openresponses.openapi.json` — pinned copy of https://www.openresponses.org/openapi/openapi.json (OpenAPI 3.1.0, "OpenAI API" v2.3.0). 108 component schemas. Defines `POST /responses` + `POST /responses/compact` (Responses API).
+
+pi-gateway v1 implements **Chat Completions**. Chat Completions schemas are inlined in `tests/contract.mjs` from the published OpenAI reference. When pi-gateway adds `/v1/responses` (v1.1+), validation against the pinned doc covers the full request/response cycle.
+
+To refresh the pinned doc:
+
+```js
+node -e "(async () => { const r = await fetch('https://www.openresponses.org/openapi/openapi.json'); require('fs').writeFileSync('schemas/openresponses.openapi.json', await r.text()); })()"
+```
+
+Commit the diff. The contract test fails CI if schemas drift from what we serve.
+
+## File layout
+
+```
+.
+├── index.ts                  Pi-extension entry (slash commands, footer, tools, detached-child spawn)
+├── src/
+│   ├── cli.ts                Standalone CLI entry → dist/cli.js
+│   ├── config.ts             Layered config
+│   ├── lifecycle.ts          State machine + atomic PID lockfile + signal wiring
+│   ├── protocol/
+│   │   ├── chat-completions.ts   Typebox request schema
+│   │   └── models-list.ts        /v1/models payload + OAuth-subscription filter
+│   ├── translate/
+│   │   ├── openai-to-pi.ts       Request translator
+│   │   ├── pi-to-openai.ts       Response/SSE translator (multi-block merge, single chatcmpl-id, usage map, finish_reason map, mid-stream error frame)
+│   │   └── model-id.ts           provider/model-id parser
+│   └── server/
+│       ├── index.ts              Programmatic API (startServer/stopServer) for tests + embedding
+│       └── http-server.ts        node:http + inline router/auth/CORS/logger + SSE heartbeat
+├── schemas/
+│   └── openresponses.openapi.json   Pinned OpenAPI doc
+├── tests/
+│   ├── smoke.mjs                 Registration + bind + /healthz + /v1/models
+│   ├── extension-e2e.mjs         Real HTTP against bound server; error paths
+│   └── contract.mjs              ajv field-by-field validation
+├── scripts/
+│   ├── setup-git-hooks.mjs       prepare hook
+│   └── build-check.mjs           emit dist/cli.js + shebang + chmod
+├── .github/workflows/
+│   ├── ci.yml                    pnpm run check on push + PR
+│   └── publish.yml               Canary on main push, release on workflow_dispatch
+├── .githooks/pre-commit          pnpm run check before commit
+├── CLAUDE.md                     Project rules (this lives next to README.md)
+├── README.md                     User-facing docs
+├── llms.txt                      Short AI-consumption hub
+├── llms-full.txt                 This file
+├── AGENTS.md                     Pointer to pi-mono docs + repo conventions
+└── LICENSE                       MIT
+```
+
+## Architectural patterns
+
+### Hybrid package shape
+
+| Surface | Entry | Loaded via |
+|---------|-------|-----------|
+| Standalone CLI | `dist/cli.js` (built from `src/cli.ts`) | `bin: pi-gateway` field |
+| Pi extension | `index.ts` | `pi.extensions: ["./index.ts"]`; jiti-loaded inside pi runtime |
+| Programmatic SDK | `dist/server/index.js` | Default `exports`/`main`/`types` |
+
+The pi extension spawns the standalone binary as a **detached child** via `process.execPath` + `child.unref()` (mirrors `pi-claude-code/index.ts:187 launchDetachedRunner`). Binary resolution: prefer `dist/cli.js`; fall back to `src/cli.ts` via `@mariozechner/jiti` when `dist/` is absent (pi's auto-install via `git:` URL does NOT build).
+
+### Dependencies (NOT peer)
+
+`@mariozechner/pi-coding-agent`, `@mariozechner/pi-ai`, `@sinclair/typebox` are **runtime dependencies** (not peerDeps) because the standalone CLI needs them at process start. Siblings (pi-claude-code, pi-git-worktrees) use peerDeps because they have no bin — pi-gateway differs by design.
+
+### Programmatic API separate from CLI
+
+`src/server/index.ts` exports `startServer({...})` / `stopServer(handle)`:
+
+```ts
+import { startServer, stopServer } from "pi-gateway";
+import { DEFAULT_CONFIG } from "pi-gateway/config";  // future
+
+const handle = await startServer({
+  config: { ...DEFAULT_CONFIG, port: 0, bindAddress: "127.0.0.1" },
+});
+
+// ... use http://${handle.address.address}:${handle.address.port}
+
+await stopServer(handle);
+```
+
+Tests use this to bind a real listener on `127.0.0.1:0` without invoking the self-executing `dist/cli.js`.
+
+## Test gates (BLOCKING, run via `pnpm run check`)
+
+1. **Lint** — `pnpm run lint` (eslint, `@vllnt/eslint-config/nodejs`)
+2. **Typecheck** — `pnpm run typecheck` (`tsc --noEmit`)
+3. **Build** — `pnpm run build` (emit `dist/cli.js` + shebang via `tsconfig.build.json`)
+4. **Test** — three suites:
+   - `tests/smoke.mjs` — jiti-load index.ts with mock ExtensionAPI; bind 127.0.0.1:0; check /healthz + /v1/models
+   - `tests/extension-e2e.mjs` — real HTTP against bound server; error paths
+   - `tests/contract.mjs` — ajv field-by-field validation against pinned OpenAPI + locally-pinned Chat Completions schemas
+
+All four gates run on `pre-commit` via `simple-git-hooks` and on CI via `.github/workflows/ci.yml`.
+
+## CI/CD
+
+| Workflow | Trigger | Action |
+|----------|---------|--------|
+| `ci.yml` | push, PR | `pnpm run check` |
+| `publish.yml` | push to main (paths affecting package) | Quality gates → publish canary `<version>-canary.<sha>` |
+| `publish.yml` | `workflow_dispatch` | Quality gates → version-bump guard → conventional-commit changelog → tag `v<version>` → publish `latest` → GH Release |
+
+Both publish jobs use `--provenance --access public` (requires the repo to be public on GitHub).
+
+## Wiring clients
+
+### Open WebUI
+
+Settings → Connections → OpenAI API:
+- Base URL: `http://127.0.0.1:4000/v1`
+- API key: `pi-gateway` (any non-empty string on loopback)
+
+### LibreChat
+
+```yaml
+endpoints:
+  custom:
+    - name: "pi-gateway"
+      baseURL: "http://127.0.0.1:4000/v1"
+      apiKey: "pi-gateway"
+      models:
+        fetch: true
+```
+
+### Cursor
+
+Settings → Models → Override OpenAI Base URL → `http://127.0.0.1:4000/v1`. Cursor may need a bare model alias (it can be strict about slashes); add aliases under Settings → Models → Add Model mapping e.g. `claude-sonnet-4-5` → `anthropic/claude-sonnet-4-5`.
+
+### Continue.dev
+
+```json
+{
+  "models": [{
+    "provider": "openai",
+    "apiBase": "http://127.0.0.1:4000/v1",
+    "apiKey": "pi-gateway",
+    "model": "anthropic/claude-sonnet-4-5",
+    "title": "Claude (via pi-gateway)"
+  }]
+}
+```
+
+### Cline
+
+VS Code settings → Cline → API Provider → OpenAI Compatible. Base URL `http://127.0.0.1:4000/v1`. Model id `provider/model-id`.
+
+## Troubleshooting
+
+- **Pi auto-clone fails for the private repo.** The `git:git@github.com:...` form is SSH; verify `ssh -T git@github.com` returns your username. If not, add an SSH key at github.com/settings/keys.
+- **`gh repo create` fails.** Confirm `gh auth status` lists `repo` scope. If not: `gh auth refresh -s repo`.
+- **Cursor says "model not found".** Cursor's URL builder may strip the slash; add an alias mapping in Cursor settings.
+- **Open WebUI shows truncated reply with no error.** Likely an SSE buffering issue behind nginx. pi-gateway sets `X-Accel-Buffering: no` + `Cache-Control: no-cache, no-transform`; verify the proxy is honoring them.
+- **Codex returns "Instructions are required".** Codex's Responses API requires a system message; the client must include one. pi-gateway will return HTTP 502 with the upstream error verbatim.
+
+## Repo structure of related pi packages (for context)
+
+- `bntvllnt/pi-claude-code` — Pi extension that delegates background coding tasks to Claude Code CLI via detached child processes. Pattern reference for spawn/PID/lifecycle.
+- `bntvllnt/pi-git-worktrees` — Pi extension for safe git worktree management. Pattern reference for slash commands + footer widget + project trust.
+- `bntvllnt/pi-gateway` — this package; LiteLLM-shape OpenAI-compat HTTP frontend.
