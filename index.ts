@@ -18,6 +18,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { request as httpRequest } from "node:http";
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,14 +26,65 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
+const require = createRequire(import.meta.url);
+
 const PID_PATH = path.join(homedir(), ".pi", "agent", "gateway.pid");
 const DEFAULT_PORT = 4000;
 const DEFAULT_BIND = "127.0.0.1";
 const HEALTH_TIMEOUT_MS = 1500;
 
-function resolveCliBinary(): string {
-  const url = new URL("dist/cli.js", import.meta.url);
-  return fileURLToPath(url);
+/**
+ * Resolve the source entry of the standalone daemon. We prefer the built
+ * `dist/cli.js` when present (faster startup, no jiti). Otherwise we fall back
+ * to spawning `src/cli.ts` through jiti so the pi-installed package works
+ * without an explicit `pnpm run build` step (mirrors pi-claude-code).
+ */
+function resolveDaemonEntry():
+  | {
+      entry: string;
+      mode: "compiled";
+    }
+  | {
+      entry: string;
+      jitiCli: string;
+      mode: "jiti";
+    }
+  | null {
+  const compiled = fileURLToPath(new URL("dist/cli.js", import.meta.url));
+  if (existsSync(compiled)) {
+    return { entry: compiled, mode: "compiled" };
+  }
+  const sourceEntry = fileURLToPath(new URL("src/cli.ts", import.meta.url));
+  if (!existsSync(sourceEntry)) return null;
+  const candidates: string[] = [];
+  try {
+    const localJiti = require.resolve("@mariozechner/jiti/package.json");
+    candidates.push(path.join(path.dirname(localJiti), "lib", "jiti-cli.mjs"));
+  } catch {
+    /* ignore */
+  }
+  try {
+    const pcaPkg =
+      require.resolve("@mariozechner/pi-coding-agent/package.json");
+    candidates.push(
+      path.join(
+        path.dirname(pcaPkg),
+        "node_modules",
+        "@mariozechner",
+        "jiti",
+        "lib",
+        "jiti-cli.mjs",
+      ),
+    );
+  } catch {
+    /* ignore */
+  }
+  for (const c of candidates) {
+    if (existsSync(c)) {
+      return { entry: sourceEntry, jitiCli: c, mode: "jiti" };
+    }
+  }
+  return null;
 }
 
 function readPid(): number | null {
@@ -69,7 +121,9 @@ async function probeStatus(
 ): Promise<{ healthy: boolean; modelCount?: number }> {
   const healthy = await ping(`${url}/healthz`).catch(() => false);
   if (!healthy) return { healthy: false };
-  const modelCount = await fetchModelCount(`${url}/v1/models`).catch(() => {});
+  const modelCount = await fetchModelCount(`${url}/v1/models`).catch(
+    () => undefined,
+  );
   return { healthy: true, modelCount };
 }
 
@@ -124,20 +178,20 @@ function fetchModelCount(url: string): Promise<number | undefined> {
               Array.isArray(parsed.data) ? parsed.data.length : undefined,
             );
           } catch {
-            resolve();
+            resolve(undefined);
           }
         });
         res.on("error", () => {
-          resolve();
+          resolve(undefined);
         });
       },
     );
     req.on("error", () => {
-      resolve();
+      resolve(undefined);
     });
     req.on("timeout", () => {
       req.destroy();
-      resolve();
+      resolve(undefined);
     });
     req.end();
   });
@@ -199,15 +253,19 @@ async function getStatus(): Promise<DaemonStatus> {
 function spawnDaemon():
   | { ok: true; pid: number }
   | { error: string; ok: false } {
-  const cliBinary = resolveCliBinary();
-  if (!existsSync(cliBinary)) {
+  const target = resolveDaemonEntry();
+  if (!target) {
     return {
-      error: `pi-gateway CLI not built. Expected: ${cliBinary}. Run \`pnpm run build\` in the package directory.`,
+      error: `Could not locate pi-gateway daemon entry. Looked for dist/cli.js and src/cli.ts under ${fileURLToPath(new URL(".", import.meta.url))}.`,
       ok: false,
     };
   }
+  const args =
+    target.mode === "compiled"
+      ? [target.entry]
+      : [target.jitiCli, target.entry];
   try {
-    const child = spawn(process.execPath, [cliBinary], {
+    const child = spawn(process.execPath, args, {
       detached: true,
       env: { ...process.env },
       stdio: "ignore",
