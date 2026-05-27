@@ -23,7 +23,7 @@ import { homedir } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
 const require = createRequire(import.meta.url);
@@ -65,7 +65,7 @@ function resolveDaemonEntry():
   }
   try {
     const pcaPkg =
-      require.resolve("@mariozechner/pi-coding-agent/package.json");
+      require.resolve("@earendil-works/pi-coding-agent/package.json");
     candidates.push(
       path.join(
         path.dirname(pcaPkg),

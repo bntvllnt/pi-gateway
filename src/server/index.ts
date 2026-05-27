@@ -8,7 +8,7 @@
  */
 import type { Server } from "node:http";
 
-import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
+import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 
 import type { GatewayConfig } from "../config.js";
 

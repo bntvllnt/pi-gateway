@@ -76,8 +76,8 @@
     ]
   },
   "dependencies": {
-    "@mariozechner/pi-ai": "^0.67.1",
-    "@mariozechner/pi-coding-agent": "^0.67.1",
+    "@earendil-works/pi-ai": "^0.75.4",
+    "@earendil-works/pi-coding-agent": "^0.75.4",
     "@sinclair/typebox": "^0.34.49"
   },
   "devDependencies": {
