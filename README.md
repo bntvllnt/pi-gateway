@@ -1,52 +1,128 @@
 # pi-gateway
 
-OpenAI-compatible local API on top of [pi.dev](https://github.com/badlogic/pi-mono). LiteLLM-shape: a stateless protocol translator that re-exposes every model pi can reach (Anthropic, OpenAI, Google, Mistral, Groq, Bedrock, Vertex, plus OAuth subscriptions like Claude Pro / ChatGPT Codex / GitHub Copilot / Gemini CLI) via `POST /v1/chat/completions` and `GET /v1/models` — so Open WebUI, LibreChat, Cursor, Continue.dev, Cline, or any OpenAI-compat client can use them without re-entering credentials.
+[![npm version](https://img.shields.io/npm/v/pi-gateway.svg)](https://www.npmjs.com/package/pi-gateway)
+[![CI](https://github.com/bntvllnt/pi-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/bntvllnt/pi-gateway/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-The package ships in two shapes from the same repo:
+> **OpenAI-compatible local API on top of [pi.dev](https://github.com/badlogic/pi-mono).**
+> LiteLLM-shape stateless protocol translator. Re-exposes every model `pi` can reach (Anthropic, OpenAI, Google, Mistral, Bedrock, Vertex, **plus OAuth subscriptions** like Claude Pro / ChatGPT Codex / GitHub Copilot / Gemini CLI) through `POST /v1/chat/completions` + `GET /v1/models`, so Open WebUI / LibreChat / Cursor / Continue.dev / Cline can use them without re-entering credentials.
 
-1. **Pi extension** (recommended) — add to `~/.pi/agent/settings.json` `packages` and use `/gateway:start` from inside pi. The slash command spawns the binary as a **detached child** so the daemon survives pi session shutdown.
-2. **Standalone CLI** — run `pi-gateway --port 4000` directly; Ctrl+C to stop.
+## Install
 
-## Non-goals
+Two install paths from one package:
 
-- Not an agent: no pi `AgentSession` is created, no system prompt is injected, no tools are executed by pi-gateway (tools are forwarded; the client executes and posts `role: "tool"` results).
-- No conversation memory: every request is independent.
-
-## Install — via pi (recommended)
+### 1. Standalone CLI (no pi required)
 
 ```bash
-# 1) Clone & install
-git clone git@github.com:bntvllnt/pi-gateway.git ~/dev/pi-gateway
-cd ~/dev/pi-gateway
-pnpm install
-pnpm run build
-
-# 2) Wire it into ~/.pi/agent/settings.json
-#    Add to the "packages" array:
-#      "git:git@github.com:bntvllnt/pi-gateway"
-#    Pi auto-clones to ~/.pi/agent/git/github.com/bntvllnt/pi-gateway/ on next session start.
+pnpm dlx pi-gateway --port 4000
+# or globally
+npm i -g pi-gateway && pi-gateway --port 4000
 ```
 
-Inside pi:
+Runs in the foreground; Ctrl+C to stop.
+
+### 2. Pi extension (recommended if you already use pi)
+
+Add to `~/.pi/agent/settings.json`:
+
+```jsonc
+{
+  "packages": [
+    "git:git@github.com:bntvllnt/pi-gateway"
+  ]
+}
+```
+
+Restart `pi`. Then inside pi:
 
 ```
 /gateway:start    # spawn the daemon (detached, survives pi exit)
-/gateway:status   # show URL + model count + pid
+/gateway:status   # show url + pid + model count
 /gateway:stop     # SIGTERM the daemon
 ```
 
-The footer shows `Gateway: running · http://127.0.0.1:4000 · N models` while the daemon is up.
+## Wire your client
 
-## Install — standalone
+Point any OpenAI-compatible client at `http://127.0.0.1:4000/v1`. The API key field accepts any non-empty string on loopback.
 
-```bash
-git clone git@github.com:bntvllnt/pi-gateway.git
-cd pi-gateway
-pnpm install && pnpm run build
-node dist/cli.js --port 4000
-# or, after `npm i -g .`:
-pi-gateway --port 4000
+<details>
+<summary><b>Open WebUI</b></summary>
+
+Settings → Connections → OpenAI API:
+- **Base URL:** `http://127.0.0.1:4000/v1`
+- **API key:** `pi-gateway` (any non-empty string)
+
+Model dropdown populates from `GET /v1/models`.
+</details>
+
+<details>
+<summary><b>LibreChat</b></summary>
+
+```yaml
+# librechat.yaml
+endpoints:
+  custom:
+    - name: "pi-gateway"
+      baseURL: "http://127.0.0.1:4000/v1"
+      apiKey: "pi-gateway"
+      models:
+        fetch: true
 ```
+</details>
+
+<details>
+<summary><b>Cursor</b></summary>
+
+Settings → Models → "Override OpenAI Base URL" → `http://127.0.0.1:4000/v1`.
+
+Cursor may need a bare model id alias (it can be strict about slashes). Add aliases under Settings → Models → Add Model, e.g. `claude-sonnet-4-5` → `anthropic/claude-sonnet-4-5`.
+</details>
+
+<details>
+<summary><b>Continue.dev</b></summary>
+
+```json
+{
+  "models": [{
+    "provider": "openai",
+    "apiBase": "http://127.0.0.1:4000/v1",
+    "apiKey": "pi-gateway",
+    "model": "anthropic/claude-sonnet-4-5",
+    "title": "Claude via pi-gateway"
+  }]
+}
+```
+</details>
+
+<details>
+<summary><b>Cline (VS Code)</b></summary>
+
+API Provider → OpenAI Compatible.
+- **Base URL:** `http://127.0.0.1:4000/v1`
+- **API key:** any non-empty string
+- **Model:** `provider/model-id` (e.g., `openai/gpt-4o`, `anthropic/claude-sonnet-4-5`)
+</details>
+
+## Endpoints
+
+| Method | Path | Notes |
+|--------|------|-------|
+| `GET`  | `/healthz` | Liveness; returns `{ ok, uptimeMs }` |
+| `GET`  | `/v1/models` | OpenAI list payload; `id: "provider/model-id"` |
+| `POST` | `/v1/chat/completions` | Stream + non-stream Chat Completions |
+
+Out of scope for v1: `/v1/responses`, `/v1/embeddings`, `/v1/images/generations`, `/v1/audio/*`, `/v1/messages` (Anthropic Messages format).
+
+## What pi-gateway is — and isn't
+
+**Is:** a stateless HTTP frontend. Validates → resolves model → resolves auth → calls `pi-ai.complete()` or `pi-ai.stream()` → translates back into OpenAI Chat Completions shape (JSON or SSE).
+
+**Is not:**
+
+- ❌ A pi agent. No pi `AgentSession` is created.
+- ❌ A prompt injector. What the client sends is what pi-ai sees — no system prompt, no tools, no skills are added.
+- ❌ A tool runner. `tools` and `tool_choice` are forwarded; the client executes and posts `role: "tool"` results.
+- ❌ A conversation store. Each `POST /v1/chat/completions` is independent.
 
 ## CLI flags
 
@@ -62,92 +138,78 @@ pi-gateway --port 4000
 | `--model-denylist ID` | — | Repeatable |
 | `--expose-oauth-subscriptions` | on loopback only | Expose Claude Pro / Codex / Copilot on non-loopback too |
 | `--require-key-on-loopback` | off | Force bearer auth even on `127.0.0.1` |
+| `--version` | — | Print version + exit |
 
-**No `--api-key` flag.** Argv leaks via `/proc/<pid>/cmdline` + `ps aux`. Set the key in `~/.pi/agent/gateway.json` (`{ "apiKey": "..." }`) or via `PI_GATEWAY_API_KEY` env var.
+> **No `--api-key` flag.** Argv leaks via `/proc/<pid>/cmdline` + `ps aux`. Set the key in `~/.pi/agent/gateway.json` (`{ "apiKey": "..." }`) or via `PI_GATEWAY_API_KEY` env var.
 
-## Wiring an OpenAI-compat client
+Subcommands:
 
-### Open WebUI
-
-Settings → Connections → OpenAI API:
-
-- Base URL: `http://127.0.0.1:4000/v1`
-- API key: any non-empty string (e.g. `pi-gateway`) — Open WebUI requires the field be non-empty even on loopback.
-
-### LibreChat
-
-```yaml
-# librechat.yaml
-endpoints:
-  custom:
-    - name: "pi-gateway"
-      baseURL: "http://127.0.0.1:4000/v1"
-      apiKey: "pi-gateway"
-      models:
-        default: ["anthropic/claude-sonnet-4-5", "openai/gpt-4o", "google/gemini-1.5-pro"]
-        fetch: true
+```bash
+pi-gateway models    # Print available models then exit
+pi-gateway --help
+pi-gateway --version
 ```
 
-### Cursor
+## Security defaults
 
-Settings → Models → Override OpenAI Base URL → `http://127.0.0.1:4000/v1`. Cursor's model field may need a bare id alias (it can be strict about slashes in some versions); add aliases under Settings → Models → Add Model.
+- **Default bind: `127.0.0.1`.** `server.address()` is asserted after `listening` so a refactor can't silently bind `0.0.0.0`.
+- **Non-loopback bind requires `apiKey` in the config file.** CLI flag is refused.
+- **PID lockfile** at `~/.pi/agent/gateway.pid` via atomic `O_CREAT|O_EXCL`. Single instance enforced; stale files cleaned automatically.
+- **OAuth subscriptions default-allow on loopback** (so Claude Pro / Codex work from Open WebUI), **default-deny on non-loopback** unless `--expose-oauth-subscriptions`.
+- **Access log** redacts everything outside a hardcoded allowlist (`content-type`, `content-length`, `user-agent`, `accept`, `accept-encoding`, `host`). No `authorization` / token / key headers in logs.
 
-### Continue.dev
+## Programmatic SDK
 
-```json
-{
-  "models": [{
-    "provider": "openai",
-    "apiBase": "http://127.0.0.1:4000/v1",
-    "apiKey": "pi-gateway",
-    "model": "anthropic/claude-sonnet-4-5",
-    "title": "Claude (via pi-gateway)"
-  }]
-}
+```ts
+import { startServer, stopServer } from "pi-gateway";
+import { DEFAULT_CONFIG } from "pi-gateway/config";  // future export
+
+const handle = await startServer({
+  config: { ...DEFAULT_CONFIG, port: 0, bindAddress: "127.0.0.1" },
+});
+
+const url = `http://${handle.address.address}:${handle.address.port}`;
+const r = await fetch(`${url}/v1/chat/completions`, { method: "POST", /* ... */ });
+
+await stopServer(handle);
 ```
 
-## OAuth-subscription posture
+Used by the test suite to bind real listeners on `127.0.0.1:0` without invoking the binary.
 
-OAuth-backed providers (Claude Pro/Max, ChatGPT Plus/Pro Codex, GitHub Copilot, Google Gemini CLI, Google Antigravity) are **default-allowed on loopback** because loopback access ≈ same-user pi CLI access. They are **default-denied on non-loopback** unless `--expose-oauth-subscriptions` (or `exposeOAuthSubscriptions: true` in config) is set, because re-exposing personal-use subscriptions to LAN clients may violate provider ToS.
+## Development
 
-## Endpoints
-
-| Method | Path | Notes |
-|--------|------|-------|
-| `GET`  | `/healthz` | Liveness; returns `{ ok: true, uptimeMs }`. |
-| `GET`  | `/v1/models` | Lists every available model as `data[].id = "provider/model-id"`. |
-| `POST` | `/v1/chat/completions` | Stream + non-stream Chat Completions. |
-
-Out of scope for v1: `POST /v1/responses`, `POST /v1/embeddings`, `POST /v1/images/generations`, `POST /v1/messages` (Anthropic Messages format).
-
-## Troubleshooting
-
-- **Pi auto-clone fails for a private repo.** The `git:git@github.com:...` form is SSH; verify `ssh -T git@github.com` returns your username. If not, add an SSH key at github.com/settings/keys.
-- **`gh repo create` fails.** Confirm `gh auth status` lists `repo` scope. If not: `gh auth refresh -s repo`.
-- **Cursor says "model not found".** Cursor's URL builder may strip the slash; add an alias mapping `claude-sonnet-4-5` → `anthropic/claude-sonnet-4-5`.
-- **Open WebUI shows truncated reply with no error.** Likely an SSE buffering issue behind nginx. pi-gateway sets `X-Accel-Buffering: no` and `Cache-Control: no-cache, no-transform`; verify the proxy is honoring them.
-
-## Architecture
-
+```bash
+git clone https://github.com/bntvllnt/pi-gateway.git
+cd pi-gateway
+pnpm install
+pnpm run check   # lint + typecheck + build + smoke + e2e + contract
 ```
-client (Open WebUI / Cursor / etc.)
-        │ POST /v1/chat/completions
-        ▼
-┌──────────────────────────────────────────────┐
-│ pi-gateway (node:http daemon)                │
-│   validate (Typebox)                          │
-│   resolve Model via ModelRegistry             │
-│   translate OAI → pi-ai Context               │
-│   stream/complete (pi-ai)                     │
-│   translate pi-ai → SSE / JSON                │
-└──────────────────────────────────────────────┘
-        │ uses as libraries
-        ▼
-@mariozechner/pi-coding-agent  AuthStorage, ModelRegistry
-@mariozechner/pi-ai            complete(), stream()
-~/.pi/agent/auth.json          reused (no duplication)
-```
+
+Quality gates:
+
+| Gate | Command |
+|------|---------|
+| Lint | `pnpm run lint` |
+| Typecheck | `pnpm run typecheck` |
+| Build | `pnpm run build` |
+| Smoke | `node tests/smoke.mjs` |
+| E2E | `node tests/extension-e2e.mjs` |
+| **Contract** | `node tests/contract.mjs` — ajv field-by-field validation against the pinned OpenAPI doc + Chat Completions schemas |
+
+All gates run on `pre-commit` and CI.
+
+## Schemas
+
+`schemas/openresponses.openapi.json` pins https://www.openresponses.org/openapi/openapi.json (OpenAI API v2.3.0, 108 component schemas) in-repo to avoid drift. The contract test loads this file and rejects any response that doesn't match.
 
 ## License
 
-Private — owned by [bntvllnt](https://github.com/bntvllnt).
+[MIT](LICENSE) © [bntvllnt](https://github.com/bntvllnt)
+
+## See also
+
+- [llms.txt](llms.txt) — short hub for AI consumption
+- [llms-full.txt](llms-full.txt) — full reference for AI consumption
+- [CLAUDE.md](CLAUDE.md) — project rules + contract guarantees
+- [pi.dev](https://github.com/badlogic/pi-mono) — the underlying agent runtime
+- [pi-claude-code](https://github.com/bntvllnt/pi-claude-code), [pi-git-worktrees](https://github.com/bntvllnt/pi-git-worktrees) — sibling pi extensions

@@ -1,32 +1,67 @@
 {
   "name": "pi-gateway",
-  "private": true,
-  "version": "0.0.0",
-  "description": "OpenAI-compatible local API on top of pi.dev — LiteLLM-shape stateless protocol translator. Standalone CLI + optional pi-extension wrapper.",
+  "version": "0.1.0",
+  "description": "OpenAI-compatible local API on top of pi.dev — LiteLLM-shape stateless protocol translator. Standalone CLI + pi-extension wrapper.",
   "keywords": [
-    "pi-package",
-    "pi-extension",
     "openai",
+    "openai-compatible",
+    "openai-api",
+    "chat-completions",
     "litellm",
     "gateway",
-    "pi"
+    "llm",
+    "proxy",
+    "pi",
+    "pi-dev",
+    "pi-extension",
+    "openrouter",
+    "openwebui",
+    "librechat",
+    "claude",
+    "gpt",
+    "codex",
+    "anthropic",
+    "ai"
   ],
   "homepage": "https://github.com/bntvllnt/pi-gateway#readme",
+  "bugs": {
+    "url": "https://github.com/bntvllnt/pi-gateway/issues"
+  },
+  "license": "MIT",
+  "author": "bntvllnt <https://github.com/bntvllnt>",
   "repository": {
     "type": "git",
-    "url": "https://github.com/bntvllnt/pi-gateway.git"
+    "url": "git+https://github.com/bntvllnt/pi-gateway.git"
   },
   "type": "module",
   "packageManager": "pnpm@10.28.2",
   "bin": {
     "pi-gateway": "dist/cli.js"
   },
+  "main": "./dist/server/index.js",
+  "types": "./dist/server/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/server/index.d.ts",
+      "import": "./dist/server/index.js"
+    }
+  },
   "files": [
     "dist",
     "index.ts",
     "src",
-    "README.md"
+    "schemas",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
   ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "engines": {
+    "node": ">=20.18"
+  },
   "scripts": {
     "prepare": "node ./scripts/setup-git-hooks.mjs",
     "lint": "eslint .",
