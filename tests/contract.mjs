@@ -259,18 +259,27 @@ try {
   assert.equal(await waitHealthy(), true, "daemon failed to start");
 
   console.log("\n=== /v1/models payload conforms to ListModelsResponse ===");
+  let availableModelId;
   {
     const r = await fetch(`${base}/v1/models`);
-    expectValid("/v1/models JSON validates", validateModelsList, await r.json());
+    const body = await r.json();
+    expectValid("/v1/models JSON validates", validateModelsList, body);
+    availableModelId = Array.isArray(body.data) && body.data.length > 0 ? body.data[0].id : undefined;
+    if (availableModelId) {
+      console.log(`  ✓ first available model: ${availableModelId}`);
+    } else {
+      console.log("  ! no models available in this environment (no auth configured)");
+    }
   }
 
-  console.log("\n=== /v1/chat/completions non-stream conforms to CreateChatCompletionResponse ===");
+  console.log("\n=== /v1/chat/completions non-stream conforms to OpenAI shape ===");
   {
+    const targetModel = availableModelId ?? "openai-codex/gpt-5.4";
     const r = await fetch(`${base}/v1/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        model: "openai-codex/gpt-5.4",
+        model: targetModel,
         messages: [
           { role: "system", content: "You are concise." },
           { role: "user", content: "Reply with exactly: OK" },
@@ -278,22 +287,27 @@ try {
         max_tokens: 30,
       }),
     });
-    if (r.status !== 200) {
-      console.log(`  ! non-stream returned ${r.status}; skipping JSON validation`);
-      const body = await r.json();
-      console.log("    body:", JSON.stringify(body).slice(0, 300));
+    if (r.status === 200) {
+      expectValid("non-stream success body validates ChatCompletion schema", validateChatJson, await r.json());
     } else {
-      expectValid("non-stream JSON validates", validateChatJson, await r.json());
+      // No-auth / upstream-error path: validate the error envelope shape instead.
+      const body = await r.json();
+      expectValid(
+        `non-stream ${r.status} body validates OpenAI error envelope`,
+        validateErrorEnvelope,
+        body,
+      );
     }
   }
 
-  console.log("\n=== /v1/chat/completions stream chunks conform to chat.completion.chunk ===");
+  console.log("\n=== /v1/chat/completions stream conforms to OpenAI SSE shape ===");
   {
+    const targetModel = availableModelId ?? "openai-codex/gpt-5.4";
     const r = await fetch(`${base}/v1/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        model: "openai-codex/gpt-5.4",
+        model: targetModel,
         stream: true,
         stream_options: { include_usage: true },
         messages: [
@@ -304,22 +318,52 @@ try {
       }),
     });
     if (r.status !== 200) {
-      console.log(`  ! stream returned ${r.status}; skipping chunk validation`);
+      // Pre-stream failure (auth, schema, etc.) → JSON error envelope.
+      const body = await r.json();
+      expectValid(
+        `pre-stream ${r.status} body validates OpenAI error envelope`,
+        validateErrorEnvelope,
+        body,
+      );
     } else {
       const text = await r.text();
       const frames = text.split("\n\n").map((f) => f.trim()).filter(Boolean);
-      const dataFrames = frames
-        .slice(0, -1)
-        .map((f) => JSON.parse(f.slice("data: ".length)));
-      for (const [i, chunk] of dataFrames.entries()) {
-        expectValid(`chunk[${i}] validates`, validateChatChunk, chunk);
-      }
-      const last = frames[frames.length - 1];
-      if (last !== "data: [DONE]") {
-        console.log(`  ✗ terminator not '[DONE]'`);
-        failures.push("terminator");
+      if (frames.length === 0) {
+        failures.push("stream body was empty");
       } else {
-        console.log("  ✓ stream terminator is data: [DONE]");
+        // Distinguish: error-ended stream (mid-stream provider error → frame
+        // with `error` key, then connection close, NO trailing [DONE]) vs.
+        // happy-path (chunks then `data: [DONE]`).
+        const parsedFrames = frames
+          .filter((f) => f !== "data: [DONE]")
+          .map((f) => JSON.parse(f.slice("data: ".length)));
+        const errorFrame = parsedFrames.find((p) => "error" in p);
+        const last = frames[frames.length - 1];
+
+        if (errorFrame) {
+          expectValid(
+            "mid-stream error frame validates OpenAI error envelope",
+            validateErrorEnvelope,
+            errorFrame,
+          );
+          if (last === "data: [DONE]") {
+            console.log("  ✗ error frame followed by [DONE] (against OpenAI mid-stream error convention)");
+            failures.push("error frame followed by [DONE]");
+          } else {
+            console.log("  ✓ mid-stream error has NO trailing [DONE] (correct per OpenAI convention)");
+          }
+        } else {
+          // Happy path
+          for (const [i, chunk] of parsedFrames.entries()) {
+            expectValid(`chunk[${i}] validates`, validateChatChunk, chunk);
+          }
+          if (last === "data: [DONE]") {
+            console.log("  ✓ stream terminator is data: [DONE]");
+          } else {
+            console.log(`  ✗ terminator not '[DONE]' (got '${last}')`);
+            failures.push("terminator");
+          }
+        }
       }
     }
   }

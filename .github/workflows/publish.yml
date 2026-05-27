@@ -47,7 +47,11 @@ jobs:
   canary:
     name: Publish Canary
     needs: quality
-    if: github.event_name == 'push'
+    # Gated on `vars.ENABLE_CANARY == 'true'`. Set via:
+    #   gh variable set ENABLE_CANARY --body 'true' --repo bntvllnt/pi-gateway
+    # Recommended only after npm trusted-publisher is configured for
+    # bntvllnt/pi-gateway (see https://www.npmjs.com/settings/~/packages).
+    if: github.event_name == 'push' && vars.ENABLE_CANARY == 'true'
     runs-on: ubuntu-latest
     permissions:
       id-token: write
