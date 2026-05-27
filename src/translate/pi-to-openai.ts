@@ -28,7 +28,7 @@ import type {
   AssistantMessageEventStream,
   StopReason,
   Usage,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 
 export interface ChatCompletionJson {
   choices: {

@@ -104,7 +104,7 @@ The extension spawns the standalone binary as a **detached child** via `process.
 
 ### Dependencies (NOT peer)
 
-`@mariozechner/pi-coding-agent`, `@mariozechner/pi-ai`, `@sinclair/typebox` are **runtime dependencies** (not peerDeps) because the standalone CLI needs them at process start. Pi-managed installs also work because the same deps satisfy the pi runtime. Siblings (pi-claude-code, pi-git-worktrees) use peerDeps because they have no bin — pi-gateway differs by design.
+`@earendil-works/pi-coding-agent`, `@earendil-works/pi-ai`, `@sinclair/typebox` are **runtime dependencies** (not peerDeps) because the standalone CLI needs them at process start. Pi-managed installs also work because the same deps satisfy the pi runtime. Siblings (pi-claude-code, pi-git-worktrees) use peerDeps because they have no bin — pi-gateway differs by design.
 
 ### Programmatic API separate from CLI
 

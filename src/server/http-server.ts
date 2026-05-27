@@ -22,9 +22,9 @@ import {
   type ServerResponse,
 } from "node:http";
 
-import type { AssistantMessageEventStream } from "@mariozechner/pi-ai";
-import { complete, stream as piStream } from "@mariozechner/pi-ai";
-import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
+import type { AssistantMessageEventStream } from "@earendil-works/pi-ai";
+import { complete, stream as piStream } from "@earendil-works/pi-ai";
+import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 
 import type { GatewayConfig } from "../config.js";
 import { ChatCompletionRequest } from "../protocol/chat-completions.js";

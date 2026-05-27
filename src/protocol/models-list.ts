@@ -5,7 +5,7 @@
  * convention). owned_by is the provider. created is a stable per-process
  * timestamp so caching clients see consistent values.
  */
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 
 const PROCESS_START_TS = Math.floor(Date.now() / 1000);
 

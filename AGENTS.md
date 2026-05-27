@@ -10,7 +10,7 @@ All Pi documentation is in:
 
 Pi-gateway is a **stateless OpenAI-compatible HTTP frontend** to pi.dev's multi-provider routing. Two install paths:
 
-1. **Standalone CLI** — `dist/cli.js` runs a foreground daemon (`pi-gateway --port 4000`); uses `@mariozechner/pi-coding-agent` (`AuthStorage` + `ModelRegistry`) and `@mariozechner/pi-ai` (`complete` / `stream`) as libraries; never creates a pi `AgentSession`.
+1. **Standalone CLI** — `dist/cli.js` runs a foreground daemon (`pi-gateway --port 4000`); uses `@earendil-works/pi-coding-agent` (`AuthStorage` + `ModelRegistry`) and `@earendil-works/pi-ai` (`complete` / `stream`) as libraries; never creates a pi `AgentSession`.
 2. **Pi extension** — `index.ts` registers `/gateway:*` slash commands + footer status widget + LLM-callable tools. Slash commands spawn the standalone binary as a detached child via `process.execPath` + `child.unref()` (pattern from `/home/ubuntu/pi-claude-code/index.ts:187 launchDetachedRunner`). The detached child's PID is recorded in `~/.pi/agent/gateway.pid` (single-instance lockfile, atomic `fs.openSync(path, 'wx')`).
 
 ## Non-goals
