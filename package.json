@@ -1,0 +1,61 @@
+{
+  "name": "pi-gateway",
+  "private": true,
+  "version": "0.0.0",
+  "description": "OpenAI-compatible local API on top of pi.dev — LiteLLM-shape stateless protocol translator. Standalone CLI + optional pi-extension wrapper.",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "openai",
+    "litellm",
+    "gateway",
+    "pi"
+  ],
+  "homepage": "https://github.com/bntvllnt/pi-gateway#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bntvllnt/pi-gateway.git"
+  },
+  "type": "module",
+  "packageManager": "pnpm@10.28.2",
+  "bin": {
+    "pi-gateway": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "index.ts",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "prepare": "node ./scripts/setup-git-hooks.mjs",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "build": "node ./scripts/build-check.mjs",
+    "test": "node ./tests/smoke.mjs && node ./tests/extension-e2e.mjs",
+    "check": "pnpm run lint && pnpm run typecheck && pnpm run build && pnpm test"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "dependencies": {
+    "@mariozechner/pi-ai": "^0.67.1",
+    "@mariozechner/pi-coding-agent": "^0.67.1",
+    "@sinclair/typebox": "^0.34.49"
+  },
+  "devDependencies": {
+    "@mariozechner/jiti": "^2.6.5",
+    "@types/node": "^24.12.2",
+    "@vllnt/eslint-config": "^1.0.1",
+    "@vllnt/typescript": "^1.0.0",
+    "eslint": "^9.39.2",
+    "prettier": "^3.8.3",
+    "simple-git-hooks": "^2.13.1",
+    "typescript": "^5.7.3"
+  },
+  "simple-git-hooks": {
+    "pre-commit": "pnpm run check"
+  }
+}

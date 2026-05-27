@@ -1,0 +1,10 @@
+#!/usr/bin/env sh
+set -eu
+
+if command -v git >/dev/null 2>&1; then
+  for name in $(git rev-parse --local-env-vars); do
+    unset "$name"
+  done
+fi
+
+pnpm run check
