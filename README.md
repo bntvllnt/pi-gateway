@@ -208,6 +208,7 @@ All gates run on `pre-commit` and CI.
 
 ## See also
 
+- [CHANGELOG.md](CHANGELOG.md) — release notes; tags link to the matching section
 - [llms.txt](llms.txt) — short hub for AI consumption
 - [llms-full.txt](llms-full.txt) — full reference for AI consumption
 - [CLAUDE.md](CLAUDE.md) — project rules + contract guarantees

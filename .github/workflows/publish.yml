@@ -13,6 +13,7 @@ on:
       - "tsconfig.build.json"
       - "scripts/build-check.mjs"
       - ".github/workflows/publish.yml"
+      - "CHANGELOG.md"
   workflow_dispatch: {}
 
 concurrency:
@@ -123,40 +124,33 @@ jobs:
             exit 1
           fi
 
-      - name: Generate changelog
+      - name: Extract CHANGELOG section for this version
         id: changelog
         run: |
-          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          if [ -z "$LAST_TAG" ]; then
-            RANGE="HEAD"
-          else
-            RANGE="${LAST_TAG}..HEAD"
+          VERSION="${{ steps.version.outputs.version }}"
+          if [ ! -f CHANGELOG.md ]; then
+            echo "::error::CHANGELOG.md is missing. Add a `## [${VERSION}]` section before dispatching."
+            exit 1
           fi
-
+          # Extract everything from `## [<VERSION>]` (with optional ` - <date>`)
+          # up to the next `## [` heading. Strip the heading line itself.
+          NOTES=$(awk -v ver="$VERSION" '
+            BEGIN { in_section = 0 }
+            /^## \[/ {
+              if (in_section) exit
+              if ($0 ~ "^## \\[" ver "\\]") { in_section = 1; next }
+            }
+            in_section { print }
+          ' CHANGELOG.md)
+          if [ -z "$NOTES" ]; then
+            echo "::error::No `## [${VERSION}]` section found in CHANGELOG.md."
+            echo "::error::Move the contents of `## [Unreleased]` under `## [${VERSION}] - $(date +%Y-%m-%d)` and try again."
+            exit 1
+          fi
+          # Preserve newlines via the GHA multiline-output protocol.
           {
             echo "body<<CHANGELOG_EOF"
-
-            FEATS=$(git log "$RANGE" --pretty=format:"%s" --grep="^feat" 2>/dev/null || true)
-            if [ -n "$FEATS" ]; then
-              echo "### Features"
-              echo "$FEATS" | sed 's/^/- /'
-              echo ""
-            fi
-
-            FIXES=$(git log "$RANGE" --pretty=format:"%s" --grep="^fix" 2>/dev/null || true)
-            if [ -n "$FIXES" ]; then
-              echo "### Bug Fixes"
-              echo "$FIXES" | sed 's/^/- /'
-              echo ""
-            fi
-
-            OTHERS=$(git log "$RANGE" --pretty=format:"%s" --invert-grep --grep="^feat" --grep="^fix" 2>/dev/null || true)
-            if [ -n "$OTHERS" ]; then
-              echo "### Other Changes"
-              echo "$OTHERS" | sed 's/^/- /'
-              echo ""
-            fi
-
+            echo "$NOTES"
             echo "CHANGELOG_EOF"
           } >> "$GITHUB_OUTPUT"
 
