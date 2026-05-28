@@ -79,16 +79,29 @@ All four gates must pass before any commit (`simple-git-hooks` pre-commit) and o
 | Workflow | Trigger | Action |
 |----------|---------|--------|
 | `.github/workflows/ci.yml` | push to any branch, PRs | `pnpm run check` |
-| `.github/workflows/publish.yml` | push to `main` (paths) | Quality gates → canary publish `<version>-canary.<sha>` |
-| `.github/workflows/publish.yml` | `workflow_dispatch` | Quality gates → version-bump guard → conventional-commit changelog → tag `v<version>` → publish `latest` → GitHub Release |
+| `.github/workflows/publish.yml` | push to `main` (paths) | Quality gates → canary publish `<version>-canary.<sha>` (gated on `vars.ENABLE_CANARY == 'true'`) |
+| `.github/workflows/publish.yml` | `workflow_dispatch` | Quality gates → version-bump guard → **extract CHANGELOG.md `## [<version>]` section** → tag `v<version>` → publish `latest` → GitHub Release with that section as the body |
 
 Publishes use `--provenance --access public` (requires the repo to be public on GitHub).
 
-To cut a release:
+### CHANGELOG.md is the source of truth for release notes
+
+The release job reads `CHANGELOG.md`, finds the `## [<version>]` heading for the version currently in `package.json`, and uses everything until the next `## [` heading as the GitHub Release body. The workflow fails fast if the section is missing — release notes never silently fall back to the commit log.
+
+**PR contract:** append entries to the `## [Unreleased]` section under `### Added` / `### Changed` / `### Fixed` / `### Deprecated` / `### Removed` / `### Security`, per [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+### Enabling canary publishes per push
+
+1. Configure npm trusted-publisher for `pi-gateway` at <https://www.npmjs.com/settings/~/packages> (or set the `NODE_AUTH_TOKEN` repo secret with a Granular Access Token scoped to `pi-gateway`).
+2. `gh variable set ENABLE_CANARY --body 'true' --repo bntvllnt/pi-gateway`
+3. Every paths-scoped push to `main` thereafter publishes `<base-version>-canary.<7-char-sha>` to npm with `--tag canary`. Consumers opt in with `pnpm dlx pi-gateway@canary`.
+
+### Cutting a stable release
 
 1. Bump `version` in `package.json` on a feature branch.
-2. Merge to `main` (canary publishes automatically).
-3. Trigger `Publish` workflow via `workflow_dispatch`. CI tags + releases + publishes `latest`.
+2. Move the `## [Unreleased]` contents under `## [<new-version>] - YYYY-MM-DD`; add a fresh empty `## [Unreleased]` block above it; update the bottom `[<version>]:` GitHub-compare link.
+3. Merge to `main` (canary publishes automatically when enabled).
+4. Trigger `Publish` workflow via `workflow_dispatch`. CI tags, releases, and publishes `latest` with the CHANGELOG-extracted body.
 
 ## Architectural patterns
 
