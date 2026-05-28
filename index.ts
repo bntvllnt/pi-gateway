@@ -16,7 +16,14 @@
  * pi's settings.json packages array).
  */
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  unlinkSync,
+} from "node:fs";
 import { request as httpRequest } from "node:http";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
@@ -28,10 +35,25 @@ import { Type } from "@sinclair/typebox";
 
 const require = createRequire(import.meta.url);
 
-const PID_PATH = path.join(homedir(), ".pi", "agent", "gateway.pid");
+const AGENT_DIR = path.join(homedir(), ".pi", "agent");
+const PID_PATH = path.join(AGENT_DIR, "gateway.pid");
+const LOG_PATH = path.join(AGENT_DIR, "gateway.log");
 const DEFAULT_PORT = 4000;
 const DEFAULT_BIND = "127.0.0.1";
 const HEALTH_TIMEOUT_MS = 1500;
+const MAX_PROBE_BODY_BYTES = 1024 * 1024;
+const DAEMON_ENV_ALLOWLIST = new Set([
+  "HOME",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "NODE_PATH",
+  "PATH",
+  "TEMP",
+  "TMP",
+  "TMPDIR",
+  "TZ",
+]);
 
 /**
  * Resolve the source entry of the standalone daemon. We prefer the built
@@ -157,6 +179,12 @@ function ping(url: string): Promise<boolean> {
 function fetchModelCount(url: string): Promise<number | undefined> {
   return new Promise<number | undefined>((resolve) => {
     const u = new URL(url);
+    let settled = false;
+    const settle = (value: number | undefined): void => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
     const req = httpRequest(
       {
         hostname: u.hostname,
@@ -167,31 +195,37 @@ function fetchModelCount(url: string): Promise<number | undefined> {
       },
       (res) => {
         const chunks: Buffer[] = [];
+        let receivedBytes = 0;
         res.on("data", (chunk) => {
-          chunks.push(chunk instanceof Buffer ? chunk : Buffer.from(chunk));
+          const buffer = chunk instanceof Buffer ? chunk : Buffer.from(chunk);
+          receivedBytes += buffer.byteLength;
+          if (receivedBytes > MAX_PROBE_BODY_BYTES) {
+            settle(undefined);
+            req.destroy();
+            return;
+          }
+          chunks.push(buffer);
         });
         res.on("end", () => {
           try {
             const body = Buffer.concat(chunks).toString("utf8");
             const parsed = JSON.parse(body) as { data?: unknown[] };
-            resolve(
-              Array.isArray(parsed.data) ? parsed.data.length : undefined,
-            );
+            settle(Array.isArray(parsed.data) ? parsed.data.length : undefined);
           } catch {
-            resolve(undefined);
+            settle(undefined);
           }
         });
         res.on("error", () => {
-          resolve(undefined);
+          settle(undefined);
         });
       },
     );
     req.on("error", () => {
-      resolve(undefined);
+      settle(undefined);
     });
     req.on("timeout", () => {
       req.destroy();
-      resolve(undefined);
+      settle(undefined);
     });
     req.end();
   });
@@ -250,6 +284,22 @@ async function getStatus(): Promise<DaemonStatus> {
   };
 }
 
+function buildDaemonEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value === undefined) continue;
+    if (key.startsWith("PI_GATEWAY_") || DAEMON_ENV_ALLOWLIST.has(key)) {
+      env[key] = value;
+    }
+  }
+  return env;
+}
+
+function openDaemonLog(): number {
+  mkdirSync(AGENT_DIR, { recursive: true });
+  return openSync(LOG_PATH, "a");
+}
+
 function spawnDaemon():
   | { ok: true; pid: number }
   | { error: string; ok: false } {
@@ -264,11 +314,13 @@ function spawnDaemon():
     target.mode === "compiled"
       ? [target.entry]
       : [target.jitiCli, target.entry];
+  let logFd: number | undefined;
   try {
+    logFd = openDaemonLog();
     const child = spawn(process.execPath, args, {
       detached: true,
-      env: { ...process.env },
-      stdio: "ignore",
+      env: buildDaemonEnv(),
+      stdio: ["ignore", logFd, logFd],
     });
     child.unref();
     if (!child.pid) {
@@ -277,6 +329,14 @@ function spawnDaemon():
     return { ok: true, pid: child.pid };
   } catch (error) {
     return { error: `spawn failed: ${String(error)}`, ok: false };
+  } finally {
+    if (logFd !== undefined) {
+      try {
+        closeSync(logFd);
+      } catch {
+        /* ignore */
+      }
+    }
   }
 }
 
@@ -298,7 +358,7 @@ async function startDaemon(): Promise<string> {
       return `pi-gateway started (pid ${live ?? spawned.pid}, ${url}, ${modelCount ?? "?"} models). Detached — survives pi exit.`;
     }
   }
-  return `pi-gateway spawned (pid ${spawned.pid}) but did not become healthy within 8s. Check ${PID_PATH} and logs.`;
+  return `pi-gateway spawned (pid ${spawned.pid}) but did not become healthy within 8s. Check ${PID_PATH} and ${LOG_PATH}.`;
 }
 
 async function stopDaemon(): Promise<string> {
@@ -366,7 +426,7 @@ export default function piGatewayExtension(pi: ExtensionAPI): void {
     },
   });
 
-  // LLM-callable tools (read-only by default; start/stop guarded by usage intent).
+  // LLM-callable tools. Status is read-only; start/stop have daemon side effects.
   pi.registerTool({
     description:
       "Report whether pi-gateway is running, its URL, model count, and PID. Read-only; never spawns or signals.",
@@ -383,7 +443,7 @@ export default function piGatewayExtension(pi: ExtensionAPI): void {
   });
   pi.registerTool({
     description:
-      "Start pi-gateway as a detached child process if not already running.",
+      "Side effect: starts pi-gateway as a detached child process if not already running.",
     async execute() {
       const text = await startDaemon();
       return {
@@ -396,7 +456,8 @@ export default function piGatewayExtension(pi: ExtensionAPI): void {
     parameters: Type.Object({}, { additionalProperties: false }),
   });
   pi.registerTool({
-    description: "Stop the running pi-gateway daemon via SIGTERM.",
+    description:
+      "Side effect: stops the running pi-gateway daemon via SIGTERM.",
     async execute() {
       const text = await stopDaemon();
       return { content: [{ text, type: "text" }], details: { action: "stop" } };

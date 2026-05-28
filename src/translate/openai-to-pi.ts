@@ -43,6 +43,16 @@ export interface TranslatedRequest {
   context: Context;
 }
 
+export class RequestTranslationError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly param: string,
+  ) {
+    super(message);
+  }
+}
+
 export function translateRequest(
   input: TranslateRequestOptions,
 ): TranslatedRequest {
@@ -91,9 +101,9 @@ export function translateRequest(
       }
       if (msg.tool_calls) {
         for (const tc of msg.tool_calls) {
-          const parsed = safeJsonParse(tc.function.arguments) ?? {};
+          const parsed = parseToolArguments(tc.function.arguments);
           piContent.push({
-            arguments: parsed as Record<string, unknown>,
+            arguments: parsed,
             id: tc.id,
             name: tc.function.name,
             type: "toolCall",
@@ -221,12 +231,25 @@ function contentToString(
   return parts.join("\n");
 }
 
-function safeJsonParse(input: string): unknown {
+function parseToolArguments(input: string): Record<string, unknown> {
+  let parsed: unknown;
   try {
-    return JSON.parse(input);
+    parsed = JSON.parse(input);
   } catch {
-    return undefined;
+    throw new RequestTranslationError(
+      "invalid_tool_arguments",
+      "Assistant tool call arguments must be valid JSON.",
+      "messages.tool_calls.function.arguments",
+    );
   }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new RequestTranslationError(
+      "invalid_tool_arguments",
+      "Assistant tool call arguments must be a JSON object.",
+      "messages.tool_calls.function.arguments",
+    );
+  }
+  return parsed as Record<string, unknown>;
 }
 
 function parseDataUrl(url: string): { data: string; mimeType: string } | null {
@@ -237,6 +260,9 @@ function parseDataUrl(url: string): { data: string; mimeType: string } | null {
   const data = url.slice(commaIndex + 1);
   const isBase64 = header.includes(";base64");
   const mimeType = header.split(";")[0] ?? "application/octet-stream";
-  if (!isBase64) return { data, mimeType };
-  return { data, mimeType };
+  if (isBase64) return { data, mimeType };
+  return {
+    data: Buffer.from(decodeURIComponent(data), "utf8").toString("base64"),
+    mimeType,
+  };
 }

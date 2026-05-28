@@ -4,12 +4,20 @@
  * Accepted forms:
  *   - "provider/model-id"  → exact match (Open WebUI / LiteLLM / OpenRouter convention)
  *   - "model-id"           → first available match across all providers
- *   - "provider/model-id:thinking" → currently treated identically to "provider/model-id"
+ *   - "provider/model-id:thinking" → parsed only for known thinking suffixes
  *
  * Returns the resolved pi-ai Model, or `null` if the id is unknown / ambiguous.
  */
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
+
+const THINKING_SUFFIXES = new Set([
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+]);
 
 export interface ParsedModelId {
   modelId: string;
@@ -26,8 +34,11 @@ export function parseModelId(input: string): ParsedModelId {
 
   const colonIndex = modelId.lastIndexOf(":");
   if (colonIndex !== -1) {
-    thinkingLevel = modelId.slice(colonIndex + 1) || undefined;
-    modelId = modelId.slice(0, colonIndex);
+    const suffix = modelId.slice(colonIndex + 1);
+    if (THINKING_SUFFIXES.has(suffix)) {
+      thinkingLevel = suffix;
+      modelId = modelId.slice(0, colonIndex);
+    }
   }
 
   const slashIndex = modelId.indexOf("/");

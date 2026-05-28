@@ -162,6 +162,7 @@ export function mapStopReason(
 export interface SseChunkInit {
   created: number;
   id: string;
+  includeUsage?: boolean;
   modelLabel: string;
 }
 
@@ -172,7 +173,7 @@ export interface SseEmitter {
   emitError(error: {
     code: string;
     message: string;
-    param?: string;
+    param: null | string;
     type: string;
   }): void;
   /** Send any SSE frame; caller provides the full payload object (will be JSON.stringify'd). */
@@ -204,8 +205,12 @@ export async function pipeStreamToSse(
   let finalMessage: AssistantMessage | null = null;
   let emittedRole = false;
   let errored = false;
-  let errorPayload: { code: string; message: string; type: string } | null =
-    null;
+  let errorPayload: {
+    code: string;
+    message: string;
+    param: null | string;
+    type: string;
+  } | null = null;
 
   // Track tool calls already emitted so we don't re-emit the same one across
   // partial.content snapshots from text deltas.
@@ -258,6 +263,7 @@ export async function pipeStreamToSse(
           code:
             e.reason === "aborted" ? "client_disconnected" : "provider_error",
           message: e.error.errorMessage ?? "stream ended with error",
+          param: null,
           type: e.reason === "aborted" ? "request_aborted" : "upstream_error",
         };
         break;
@@ -277,7 +283,7 @@ export async function pipeStreamToSse(
   // and content live in separate chunks but many servers fold them; we send a
   // closing chunk with finish_reason + usage on the same payload.
   if (finalMessage) {
-    const usage = mapUsage(finalMessage.usage);
+    const usage = init.includeUsage ? mapUsage(finalMessage.usage) : undefined;
     emitter.write(
       makeChunk(init, {}, { finish_reason: pendingFinish ?? "stop", usage }),
     );

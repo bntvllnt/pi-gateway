@@ -22,6 +22,7 @@ import { homedir } from "node:os";
 import * as path from "node:path";
 
 import { type Static, Type } from "@sinclair/typebox";
+import { Value } from "@sinclair/typebox/value";
 
 export const GatewayConfigSchema = Type.Object(
   {
@@ -104,6 +105,50 @@ export interface ResolveConfigError {
   ok: false;
 }
 
+interface ReadConfigSuccess {
+  config: Partial<GatewayConfig>;
+  ok: true;
+}
+
+interface ReadConfigMissing {
+  ok: false;
+  reason: "missing";
+}
+
+interface ReadConfigInvalid {
+  message: string;
+  ok: false;
+  reason: "invalid";
+}
+
+type ReadConfigResult =
+  | ReadConfigInvalid
+  | ReadConfigMissing
+  | ReadConfigSuccess;
+
+export function validateGatewayConfigSecurity(
+  config: GatewayConfig,
+): ResolveConfigError | null {
+  const hasApiKey =
+    typeof config.apiKey === "string" && config.apiKey.length > 0;
+  if (!isLoopbackHost(config.bindAddress) && !hasApiKey) {
+    return {
+      exitCode: 2,
+      message: `Non-loopback bind (${config.bindAddress}) requires \`apiKey\` in the config file (~/.pi/agent/gateway.json). The --api-key CLI flag is refused (argv leaks via /proc/<pid>/cmdline / ps aux).`,
+      ok: false,
+    };
+  }
+  if (config.requireKeyOnLoopback && !hasApiKey) {
+    return {
+      exitCode: 2,
+      message:
+        "requireKeyOnLoopback requires `apiKey` in ~/.pi/agent/gateway.json or PI_GATEWAY_API_KEY.",
+      ok: false,
+    };
+  }
+  return null;
+}
+
 export function resolveConfig(
   input: ResolveConfigInput,
 ): ResolveConfigResult | ResolveConfigError {
@@ -113,22 +158,27 @@ export function resolveConfig(
   // Layer 1: ~/.pi/agent/gateway.json
   const piConfigPath = path.join(homedir(), ".pi", "agent", "gateway.json");
   const piConfig = readJsonIfExists(piConfigPath);
-  if (piConfig) {
-    merged = mergeConfig(merged, piConfig);
+  if (piConfig.ok) {
+    merged = mergeConfig(merged, piConfig.config);
     sources.push(piConfigPath);
+  } else if (piConfig.reason === "invalid") {
+    return { exitCode: 2, message: piConfig.message, ok: false };
   }
 
   // Layer 2: --config <path>
   if (input.cli.configPath) {
     const cliConfig = readJsonIfExists(input.cli.configPath);
-    if (!cliConfig) {
+    if (!cliConfig.ok) {
       return {
         exitCode: 2,
-        message: `Config file not found or unreadable: ${input.cli.configPath}`,
+        message:
+          cliConfig.reason === "missing"
+            ? `Config file not found: ${input.cli.configPath}`
+            : cliConfig.message,
         ok: false,
       };
     }
-    merged = mergeConfig(merged, cliConfig);
+    merged = mergeConfig(merged, cliConfig.config);
     sources.push(input.cli.configPath);
   }
 
@@ -156,27 +206,44 @@ export function resolveConfig(
     sources.push("cli");
   }
 
-  const isLoopback = isLoopbackHost(merged.bindAddress);
+  const schemaError = validateGatewayConfigSchema(merged);
+  if (schemaError) return schemaError;
 
-  // Security preflight.
-  if (!isLoopback && !merged.apiKey) {
-    return {
-      exitCode: 2,
-      message: `Non-loopback bind (${merged.bindAddress}) requires \`apiKey\` in the config file (~/.pi/agent/gateway.json). The --api-key CLI flag is refused (argv leaks via /proc/<pid>/cmdline / ps aux).`,
-      ok: false,
-    };
-  }
+  const securityError = validateGatewayConfigSecurity(merged);
+  if (securityError) return securityError;
+
+  const isLoopback = isLoopbackHost(merged.bindAddress);
 
   return { config: merged, configSources: sources, isLoopback, ok: true };
 }
 
-function readJsonIfExists(filePath: string): Partial<GatewayConfig> | null {
+function validateGatewayConfigSchema(
+  config: GatewayConfig,
+): ResolveConfigError | null {
+  if (Value.Check(GatewayConfigSchema, config)) return null;
+  const errors = [...Value.Errors(GatewayConfigSchema, config)].slice(0, 5);
+  const details = errors
+    .map((error) => `${error.path || "/"}: ${error.message}`)
+    .join("; ");
+  return {
+    exitCode: 2,
+    message: `Invalid pi-gateway config: ${details}`,
+    ok: false,
+  };
+}
+
+function readJsonIfExists(filePath: string): ReadConfigResult {
   try {
     const raw = readFileSync(filePath, "utf8");
-    const parsed = JSON.parse(raw) as Partial<GatewayConfig>;
-    return parsed;
-  } catch {
-    return null;
+    return { config: JSON.parse(raw) as Partial<GatewayConfig>, ok: true };
+  } catch (error) {
+    const e = error as NodeJS.ErrnoException;
+    if (e.code === "ENOENT") return { ok: false, reason: "missing" };
+    return {
+      message: `Config file not readable or valid JSON: ${filePath}: ${e.message}`,
+      ok: false,
+      reason: "invalid",
+    };
   }
 }
 

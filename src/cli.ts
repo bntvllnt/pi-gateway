@@ -284,21 +284,21 @@ async function main(): Promise<number> {
     process.stderr.write(`pi-gateway stopping...\n`);
   };
 
+  const removeSignalHandlers = installSignalHandlers({
+    controller: {
+      abortAllStreams: () => handle?.abortAllStreams(),
+      flushSockets: (timeoutMs) =>
+        new Promise<void>((resolve) =>
+          setTimeout(resolve, Math.min(timeoutMs, 5000)),
+        ),
+    },
+    forceAbortTimeoutMs: config.forceAbortTimeoutMs,
+    onShuttingDown: onShutdown,
+    serverClose: () => handle?.close() ?? Promise.resolve(),
+  });
+
   try {
     handle = await startServer({ config });
-
-    installSignalHandlers({
-      controller: {
-        abortAllStreams: () => handle?.abortAllStreams(),
-        flushSockets: (timeoutMs) =>
-          new Promise<void>((resolve) =>
-            setTimeout(resolve, Math.min(timeoutMs, 5000)),
-          ),
-      },
-      forceAbortTimeoutMs: config.forceAbortTimeoutMs,
-      onShuttingDown: onShutdown,
-      serverClose: () => handle?.close() ?? Promise.resolve(),
-    });
 
     const addr = handle.address;
     const url = `http://${addr.address}:${addr.port}`;
@@ -322,6 +322,7 @@ async function main(): Promise<number> {
     });
     return 0;
   } catch (error) {
+    removeSignalHandlers();
     process.stderr.write(`pi-gateway failed to start: ${String(error)}\n`);
     releasePidLockfile();
     return 1;

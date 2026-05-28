@@ -1,64 +1,156 @@
 #!/usr/bin/env node
 /**
- * E2E: bind a real server on 127.0.0.1:0, register a `faux` model in a temp
- * AuthStorage, and exercise /v1/chat/completions stream + non-stream + error
- * paths.
+ * E2E: bind a real server on 127.0.0.1:0 with a deterministic `faux` model
+ * and exercise /v1/chat/completions stream + non-stream + error paths.
  *
  * Network calls hit the in-process pi-ai `faux` provider only; no real LLM
  * calls are made.
  */
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import {
+  fauxAssistantMessage,
+  registerFauxProvider,
+} from "@earendil-works/pi-ai";
 import createJiti from "@mariozechner/jiti";
 
-const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const jiti = createJiti(import.meta.url, { interopDefault: true, moduleCache: false });
+const packageRoot = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
+const jiti = createJiti(import.meta.url, {
+  interopDefault: true,
+  moduleCache: false,
+});
+const FAUX_PROVIDER = "faux-e2e";
+const FAUX_MODEL = "faux-chat";
 
 function log(msg) {
   process.stdout.write(`${msg}\n`);
 }
 
+function fauxModelDefinition() {
+  return {
+    contextWindow: 128_000,
+    cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 },
+    id: FAUX_MODEL,
+    input: ["text", "image"],
+    maxTokens: 16_384,
+    name: "Faux E2E Model",
+    reasoning: false,
+  };
+}
+
+async function loadBuiltServerModules() {
+  const distServer = path.join(packageRoot, "dist", "server", "index.js");
+  const distConfig = path.join(packageRoot, "dist", "config.js");
+  if (existsSync(distServer) && existsSync(distConfig)) {
+    return {
+      configModule: await import(pathToFileURL(distConfig).href),
+      serverModule: await import(pathToFileURL(distServer).href),
+    };
+  }
+  return {
+    configModule: await jiti(path.join(packageRoot, "src", "config.ts")),
+    serverModule: await jiti(
+      path.join(packageRoot, "src", "server", "index.ts"),
+    ),
+  };
+}
+
 async function main() {
-  const serverModule = await jiti(path.join(packageRoot, "src", "server", "index.ts"));
-  const configModule = await jiti(path.join(packageRoot, "src", "config.ts"));
+  const { configModule, serverModule } = await loadBuiltServerModules();
+  const faux = registerFauxProvider({
+    api: "faux-e2e-api",
+    models: [fauxModelDefinition()],
+    provider: FAUX_PROVIDER,
+    tokenSize: { max: 4096, min: 4096 },
+    tokensPerSecond: 0,
+  });
+  faux.setResponses([
+    fauxAssistantMessage("OK"),
+    fauxAssistantMessage("STREAMOK"),
+  ]);
+
+  const modelRegistry = ModelRegistry.inMemory(AuthStorage.inMemory());
+  modelRegistry.registerProvider(FAUX_PROVIDER, {
+    api: faux.api,
+    apiKey: "test-key",
+    baseUrl: "http://localhost:0",
+    models: [{ ...fauxModelDefinition(), api: faux.api }],
+  });
 
   const config = {
     ...configModule.DEFAULT_CONFIG,
-    port: 0,
     bindAddress: "127.0.0.1",
+    port: 0,
   };
 
-  // We rely on whatever pi auth is configured in the dev env. The E2E
-  // exercises the gateway endpoints with a model id that may or may not be
-  // available — we assert wire shape regardless of provider intelligence.
   const handle = await serverModule.startServer({
     config,
     log: () => {},
+    modelRegistry,
   });
   const base = `http://127.0.0.1:${handle.address.port}`;
+  const model = `${FAUX_PROVIDER}/${FAUX_MODEL}`;
 
   try {
-    // /healthz
     {
       const r = await fetch(`${base}/healthz`);
       assert.equal(r.status, 200);
       log("PASS /healthz");
     }
 
-    // /v1/models
-    let modelsList;
     {
       const r = await fetch(`${base}/v1/models`);
       assert.equal(r.status, 200);
       const body = await r.json();
       assert.equal(body.object, "list");
-      assert.ok(Array.isArray(body.data));
-      modelsList = body.data;
-      log(`PASS /v1/models (${modelsList.length} models)`);
+      assert.deepEqual(
+        body.data.map((entry) => entry.id),
+        [model],
+      );
+      log(`PASS /v1/models (${body.data.length} models)`);
     }
 
-    // Unknown model → 404
+    {
+      const r = await fetch(`${base}/v1/chat/completions`, {
+        body: JSON.stringify({
+          max_tokens: 30,
+          messages: [{ content: "Say OK", role: "user" }],
+          model,
+        }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      });
+      assert.equal(r.status, 200);
+      const body = await r.json();
+      assert.equal(body.choices[0].message.content, "OK");
+      log("PASS non-stream chat completion");
+    }
+
+    {
+      const r = await fetch(`${base}/v1/chat/completions`, {
+        body: JSON.stringify({
+          max_tokens: 30,
+          messages: [{ content: "Say STREAMOK", role: "user" }],
+          model,
+          stream: true,
+          stream_options: { include_usage: true },
+        }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      });
+      assert.equal(r.status, 200);
+      const text = await r.text();
+      assert.match(text, /STREAMOK/);
+      assert.match(text, /data: \[DONE\]/);
+      log("PASS stream chat completion");
+    }
+
     {
       const r = await fetch(`${base}/v1/chat/completions`, {
         method: "POST",
@@ -74,7 +166,6 @@ async function main() {
       log("PASS unknown model → 404");
     }
 
-    // Invalid JSON → 400
     {
       const r = await fetch(`${base}/v1/chat/completions`, {
         method: "POST",
@@ -85,7 +176,6 @@ async function main() {
       log("PASS invalid JSON → 400");
     }
 
-    // Schema mismatch → 400
     {
       const r = await fetch(`${base}/v1/chat/completions`, {
         method: "POST",
@@ -96,7 +186,6 @@ async function main() {
       log("PASS schema mismatch → 400");
     }
 
-    // Unknown route → 404
     {
       const r = await fetch(`${base}/v1/responses`);
       assert.equal(r.status, 404);
@@ -106,6 +195,7 @@ async function main() {
     log("ALL E2E TESTS PASSED");
   } finally {
     await serverModule.stopServer(handle);
+    faux.unregister();
   }
 }
 
