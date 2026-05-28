@@ -15,11 +15,15 @@
  *     end-to-end against this same spec.
  */
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import {
+  fauxAssistantMessage,
+  registerFauxProvider,
+} from "@earendil-works/pi-ai";
+import createJiti from "@mariozechner/jiti";
 import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 
@@ -27,13 +31,10 @@ const packageRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
 );
-const pidPath = path.join(homedir(), ".pi", "agent", "gateway.pid");
-
-if (existsSync(pidPath)) {
-  try {
-    unlinkSync(pidPath);
-  } catch {}
-}
+const jiti = createJiti(import.meta.url, {
+  interopDefault: true,
+  moduleCache: false,
+});
 
 // Load and lightly normalize the OpenAPI doc into a $ref-able schema bundle.
 const openapi = JSON.parse(
@@ -49,7 +50,10 @@ addFormats.default(ajv);
 
 // Register component schemas so $ref works.
 for (const [name, schema] of Object.entries(schemas)) {
-  ajv.addSchema(rewriteRefs(schema), `https://openresponses.org/schemas/${name}`);
+  ajv.addSchema(
+    rewriteRefs(schema),
+    `https://openresponses.org/schemas/${name}`,
+  );
 }
 
 function rewriteRefs(value) {
@@ -57,7 +61,11 @@ function rewriteRefs(value) {
   if (value && typeof value === "object") {
     const out = {};
     for (const [k, v] of Object.entries(value)) {
-      if (k === "$ref" && typeof v === "string" && v.startsWith("#/components/schemas/")) {
+      if (
+        k === "$ref" &&
+        typeof v === "string" &&
+        v.startsWith("#/components/schemas/")
+      ) {
         out.$ref = `https://openresponses.org/schemas/${v.slice("#/components/schemas/".length)}`;
       } else {
         out[k] = rewriteRefs(v);
@@ -101,7 +109,13 @@ const ChatCompletionResponseSchema = {
           },
           finish_reason: {
             type: "string",
-            enum: ["stop", "length", "tool_calls", "content_filter", "function_call"],
+            enum: [
+              "stop",
+              "length",
+              "tool_calls",
+              "content_filter",
+              "function_call",
+            ],
           },
           logprobs: { type: ["null", "object"] },
         },
@@ -151,7 +165,14 @@ const ChatCompletionChunkSchema = {
           },
           finish_reason: {
             type: ["string", "null"],
-            enum: ["stop", "length", "tool_calls", "content_filter", "function_call", null],
+            enum: [
+              "stop",
+              "length",
+              "tool_calls",
+              "content_filter",
+              "function_call",
+              null,
+            ],
           },
           logprobs: { type: ["null", "object"] },
         },
@@ -196,7 +217,7 @@ const OpenAIErrorEnvelopeSchema = {
   properties: {
     error: {
       type: "object",
-      required: ["type", "message"],
+      required: ["type", "message", "code", "param"],
       properties: {
         type: { type: "string", minLength: 1 },
         code: { type: ["string", "null"] },
@@ -214,32 +235,74 @@ const validateChatChunk = ajv.compile(ChatCompletionChunkSchema);
 const validateModelsList = ajv.compile(ModelsListSchema);
 const validateErrorEnvelope = ajv.compile(OpenAIErrorEnvelopeSchema);
 
-const PORT = 4096;
-const jitiCli = path.join(
-  packageRoot,
-  "node_modules",
-  "@mariozechner",
-  "jiti",
-  "lib",
-  "jiti-cli.mjs",
-);
-const cliTs = path.join(packageRoot, "src", "cli.ts");
-const daemon = spawn(process.execPath, [jitiCli, cliTs, "--port", String(PORT)], {
-  stdio: ["ignore", "ignore", "ignore"],
-  detached: false,
-});
-const base = `http://127.0.0.1:${PORT}`;
+const FAUX_PROVIDER = "faux-contract";
+const FAUX_MODEL = "faux-chat";
 
-async function waitHealthy(timeoutMs = 8000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const r = await fetch(`${base}/healthz`);
-      if (r.ok) return true;
-    } catch {}
-    await new Promise((r) => setTimeout(r, 200));
+function fauxModelDefinition() {
+  return {
+    contextWindow: 128_000,
+    cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 },
+    id: FAUX_MODEL,
+    input: ["text", "image"],
+    maxTokens: 16_384,
+    name: "Faux Contract Model",
+    reasoning: false,
+  };
+}
+
+async function loadBuiltServerModules() {
+  const distServer = path.join(packageRoot, "dist", "server", "index.js");
+  const distConfig = path.join(packageRoot, "dist", "config.js");
+  if (existsSync(distServer) && existsSync(distConfig)) {
+    return {
+      configModule: await import(pathToFileURL(distConfig).href),
+      serverModule: await import(pathToFileURL(distServer).href),
+    };
   }
-  return false;
+  return {
+    configModule: await jiti(path.join(packageRoot, "src", "config.ts")),
+    serverModule: await jiti(
+      path.join(packageRoot, "src", "server", "index.ts"),
+    ),
+  };
+}
+
+async function startFauxServer() {
+  const { configModule, serverModule } = await loadBuiltServerModules();
+  const faux = registerFauxProvider({
+    api: "faux-contract-api",
+    models: [fauxModelDefinition()],
+    provider: FAUX_PROVIDER,
+    tokenSize: { max: 4096, min: 4096 },
+    tokensPerSecond: 0,
+  });
+  faux.setResponses([
+    fauxAssistantMessage("OK"),
+    fauxAssistantMessage("STREAMOK"),
+  ]);
+
+  const modelRegistry = ModelRegistry.inMemory(AuthStorage.inMemory());
+  modelRegistry.registerProvider(FAUX_PROVIDER, {
+    api: faux.api,
+    apiKey: "test-key",
+    baseUrl: "http://localhost:0",
+    models: [{ ...fauxModelDefinition(), api: faux.api }],
+  });
+  const handle = await serverModule.startServer({
+    config: {
+      ...configModule.DEFAULT_CONFIG,
+      bindAddress: "127.0.0.1",
+      port: 0,
+    },
+    log: () => {},
+    modelRegistry,
+  });
+  return {
+    base: `http://127.0.0.1:${handle.address.port}`,
+    faux,
+    handle,
+    serverModule,
+  };
 }
 
 const failures = [];
@@ -250,29 +313,34 @@ function expectValid(label, validate, payload) {
   }
   console.log(`  ✗ ${label}`);
   for (const err of validate.errors ?? []) {
-    console.log(`      ${err.instancePath || "(root)"} ${err.message} ${JSON.stringify(err.params)}`);
+    console.log(
+      `      ${err.instancePath || "(root)"} ${err.message} ${JSON.stringify(err.params)}`,
+    );
   }
   failures.push(label);
 }
 
-try {
-  assert.equal(await waitHealthy(), true, "daemon failed to start");
+const runtime = await startFauxServer();
+const base = runtime.base;
 
+try {
   console.log("\n=== /v1/models payload conforms to ListModelsResponse ===");
   let availableModelId;
   {
     const r = await fetch(`${base}/v1/models`);
     const body = await r.json();
     expectValid("/v1/models JSON validates", validateModelsList, body);
-    availableModelId = Array.isArray(body.data) && body.data.length > 0 ? body.data[0].id : undefined;
-    if (availableModelId) {
-      console.log(`  ✓ first available model: ${availableModelId}`);
-    } else {
-      console.log("  ! no models available in this environment (no auth configured)");
-    }
+    availableModelId =
+      Array.isArray(body.data) && body.data.length > 0
+        ? body.data[0].id
+        : undefined;
+    assert.equal(availableModelId, `${FAUX_PROVIDER}/${FAUX_MODEL}`);
+    console.log(`  ✓ first available model: ${availableModelId}`);
   }
 
-  console.log("\n=== /v1/chat/completions non-stream conforms to OpenAI shape ===");
+  console.log(
+    "\n=== /v1/chat/completions non-stream conforms to OpenAI shape ===",
+  );
   {
     const targetModel = availableModelId ?? "openai-codex/gpt-5.4";
     const r = await fetch(`${base}/v1/chat/completions`, {
@@ -288,7 +356,11 @@ try {
       }),
     });
     if (r.status === 200) {
-      expectValid("non-stream success body validates ChatCompletion schema", validateChatJson, await r.json());
+      expectValid(
+        "non-stream success body validates ChatCompletion schema",
+        validateChatJson,
+        await r.json(),
+      );
     } else {
       // No-auth / upstream-error path: validate the error envelope shape instead.
       const body = await r.json();
@@ -300,7 +372,9 @@ try {
     }
   }
 
-  console.log("\n=== /v1/chat/completions stream conforms to OpenAI SSE shape ===");
+  console.log(
+    "\n=== /v1/chat/completions stream conforms to OpenAI SSE shape ===",
+  );
   {
     const targetModel = availableModelId ?? "openai-codex/gpt-5.4";
     const r = await fetch(`${base}/v1/chat/completions`, {
@@ -327,7 +401,10 @@ try {
       );
     } else {
       const text = await r.text();
-      const frames = text.split("\n\n").map((f) => f.trim()).filter(Boolean);
+      const frames = text
+        .split("\n\n")
+        .map((f) => f.trim())
+        .filter(Boolean);
       if (frames.length === 0) {
         failures.push("stream body was empty");
       } else {
@@ -347,10 +424,14 @@ try {
             errorFrame,
           );
           if (last === "data: [DONE]") {
-            console.log("  ✗ error frame followed by [DONE] (against OpenAI mid-stream error convention)");
+            console.log(
+              "  ✗ error frame followed by [DONE] (against OpenAI mid-stream error convention)",
+            );
             failures.push("error frame followed by [DONE]");
           } else {
-            console.log("  ✓ mid-stream error has NO trailing [DONE] (correct per OpenAI convention)");
+            console.log(
+              "  ✓ mid-stream error has NO trailing [DONE] (correct per OpenAI convention)",
+            );
           }
         } else {
           // Happy path
@@ -406,10 +487,7 @@ try {
         },
       },
     ],
-    [
-      "unknown route → 404",
-      { url: `${base}/v1/wat`, init: { method: "GET" } },
-    ],
+    ["unknown route → 404", { url: `${base}/v1/wat`, init: { method: "GET" } }],
   ]) {
     const r = await fetch(request.url, request.init);
     expectValid(label, validateErrorEnvelope, await r.json());
@@ -421,13 +499,8 @@ try {
     `\n  paths defined: ${Object.keys(openapi.paths || {}).join(", ")}`,
   );
 } finally {
-  try {
-    daemon.kill("SIGTERM");
-  } catch {}
-  await new Promise((r) => setTimeout(r, 500));
-  try {
-    if (existsSync(pidPath)) unlinkSync(pidPath);
-  } catch {}
+  await runtime.serverModule.stopServer(runtime.handle);
+  runtime.faux.unregister();
 }
 
 if (failures.length === 0) {

@@ -9,7 +9,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 
 const PROCESS_START_TS = Math.floor(Date.now() / 1000);
 
-const OAUTH_SUBSCRIPTION_PROVIDERS = new Set([
+export const OAUTH_SUBSCRIPTION_PROVIDERS = new Set([
   "anthropic",
   "claude-code",
   "openai-codex",

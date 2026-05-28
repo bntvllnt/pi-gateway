@@ -22,15 +22,24 @@ import {
   type ServerResponse,
 } from "node:http";
 
-import type { AssistantMessageEventStream } from "@earendil-works/pi-ai";
+import type {
+  AssistantMessageEventStream,
+  ProviderStreamOptions,
+} from "@earendil-works/pi-ai";
 import { complete, stream as piStream } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 
-import type { GatewayConfig } from "../config.js";
+import { type GatewayConfig, isLoopbackHost } from "../config.js";
 import { ChatCompletionRequest } from "../protocol/chat-completions.js";
-import { buildModelsList } from "../protocol/models-list.js";
+import {
+  buildModelsList,
+  OAUTH_SUBSCRIPTION_PROVIDERS,
+} from "../protocol/models-list.js";
 import { resolveModel } from "../translate/model-id.js";
-import { translateRequest } from "../translate/openai-to-pi.js";
+import {
+  RequestTranslationError,
+  translateRequest,
+} from "../translate/openai-to-pi.js";
 import {
   newChatCompletionId,
   nowSeconds,
@@ -47,6 +56,20 @@ const SAFE_HEADERS = new Set([
   "accept-encoding",
   "host",
 ]);
+
+const MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024;
+const SERVER_HEADERS_TIMEOUT_MS = 30_000;
+const SERVER_REQUEST_TIMEOUT_MS = 120_000;
+const SERVER_KEEP_ALIVE_TIMEOUT_MS = 5000;
+const UNSUPPORTED_CHAT_PARAMETERS = [
+  "frequency_penalty",
+  "presence_penalty",
+  "response_format",
+  "seed",
+  "stop",
+  "top_p",
+  "user",
+] as const;
 
 export interface HttpServerDeps {
   config: GatewayConfig;
@@ -65,10 +88,7 @@ export interface RunningServer {
 
 export function createHttpServer(deps: HttpServerDeps): RunningServer {
   const inFlightAborts = new Set<AbortController>();
-  const isLoopback =
-    deps.config.bindAddress === "127.0.0.1" ||
-    deps.config.bindAddress === "::1" ||
-    deps.config.bindAddress === "localhost";
+  const isLoopback = isLoopbackHost(deps.config.bindAddress);
 
   const server = createServer((req, res) => {
     handle(req, res).catch((error) => {
@@ -87,12 +107,16 @@ export function createHttpServer(deps: HttpServerDeps): RunningServer {
           error: {
             code: "internal_error",
             message: "internal server error",
+            param: null,
             type: "server_error",
           },
         });
       }
     });
   });
+  server.headersTimeout = SERVER_HEADERS_TIMEOUT_MS;
+  server.requestTimeout = SERVER_REQUEST_TIMEOUT_MS;
+  server.keepAliveTimeout = SERVER_KEEP_ALIVE_TIMEOUT_MS;
 
   async function handle(
     req: IncomingMessage,
@@ -104,6 +128,25 @@ export function createHttpServer(deps: HttpServerDeps): RunningServer {
     const safeHeaders = pickSafeHeaders(req);
 
     setCors(req, res, deps.config.allowedOrigins);
+
+    if (isLoopback && !isAllowedLoopbackHost(req.headers.host)) {
+      sendJson(res, 403, {
+        error: {
+          code: "invalid_host",
+          message: "Invalid Host header for loopback pi-gateway request.",
+          param: "host",
+          type: "invalid_request_error",
+        },
+      });
+      logRequest(deps, "warn", {
+        durationMs: Date.now() - started,
+        method,
+        safeHeaders,
+        status: 403,
+        url,
+      });
+      return;
+    }
 
     if (method === "OPTIONS") {
       res.statusCode = 204;
@@ -131,6 +174,7 @@ export function createHttpServer(deps: HttpServerDeps): RunningServer {
           error: {
             code: "invalid_api_key",
             message: "Missing or invalid bearer token.",
+            param: null,
             type: "authentication_error",
           },
         });
@@ -216,10 +260,16 @@ export function createHttpServer(deps: HttpServerDeps): RunningServer {
     try {
       bodyText = await readBody(req);
     } catch (error) {
-      sendJson(res, 400, {
+      const tooLarge = error instanceof RequestBodyTooLargeError;
+      const status = tooLarge ? 413 : 400;
+      if (tooLarge) req.resume();
+      sendJson(res, status, {
         error: {
-          code: "body_read_error",
-          message: `Failed to read request body: ${String(error)}`,
+          code: tooLarge ? "request_body_too_large" : "body_read_error",
+          message: tooLarge
+            ? `Request body exceeds ${MAX_REQUEST_BODY_BYTES} bytes.`
+            : `Failed to read request body: ${String(error)}`,
+          param: null,
           type: "invalid_request_error",
         },
       });
@@ -227,7 +277,7 @@ export function createHttpServer(deps: HttpServerDeps): RunningServer {
         durationMs: Date.now() - started,
         method: "POST",
         safeHeaders,
-        status: 400,
+        status,
         url: req.url ?? "",
       });
       return;
@@ -241,6 +291,7 @@ export function createHttpServer(deps: HttpServerDeps): RunningServer {
         error: {
           code: "invalid_json",
           message: "Request body is not valid JSON",
+          param: null,
           type: "invalid_request_error",
         },
       });
@@ -264,6 +315,7 @@ export function createHttpServer(deps: HttpServerDeps): RunningServer {
           code: "schema_validation_failed",
           details: errors.map((e) => ({ message: e.message, path: e.path })),
           message: "Request does not match the OpenAI Chat Completions schema",
+          param: null,
           type: "invalid_request_error",
         },
       });
@@ -278,24 +330,38 @@ export function createHttpServer(deps: HttpServerDeps): RunningServer {
     }
 
     const parsed = body as {
+      max_completion_tokens?: number;
+      max_tokens?: number;
       messages: unknown[];
       model: string;
       stream?: boolean;
+      stream_options?: { include_usage?: boolean };
+      temperature?: number;
+      tool_choice?: unknown;
       tools?: unknown;
     };
 
-    const isUsingOAuthGate = (provider: string): boolean => {
-      // Check membership; the lookup is also done in models-list.ts.
-      const oauthSet = new Set([
-        "anthropic",
-        "claude-code",
-        "openai-codex",
-        "github-copilot",
-        "google-gemini-cli",
-        "google-antigravity",
-      ]);
-      return oauthSet.has(provider);
-    };
+    const unsupportedParam = findUnsupportedParameter(body);
+    if (unsupportedParam) {
+      sendJson(res, 400, {
+        error: {
+          code: "unsupported_parameter",
+          message: `OpenAI parameter '${unsupportedParam}' is not supported by pi-gateway yet.`,
+          param: unsupportedParam,
+          type: "invalid_request_error",
+        },
+      });
+      logRequest(deps, "warn", {
+        durationMs: Date.now() - started,
+        method: "POST",
+        safeHeaders,
+        status: 400,
+        url: req.url ?? "",
+      });
+      return;
+    }
+
+    const generationOptions = buildGenerationOptions(parsed);
 
     const model = resolveModel(deps.modelRegistry, parsed.model);
     if (!model) {
@@ -321,13 +387,14 @@ export function createHttpServer(deps: HttpServerDeps): RunningServer {
     if (
       !isLoopback &&
       !deps.config.exposeOAuthSubscriptions &&
-      (isUsingOAuthGate(model.provider) ||
+      (OAUTH_SUBSCRIPTION_PROVIDERS.has(model.provider) ||
         deps.modelRegistry.isUsingOAuth(model))
     ) {
       sendJson(res, 403, {
         error: {
           code: "subscription_exposure_disabled",
           message: `Provider '${model.provider}' is an OAuth subscription. Non-loopback binds require --expose-oauth-subscriptions or exposeOAuthSubscriptions: true in config.`,
+          param: "model",
           type: "permission_error",
         },
       });
@@ -348,6 +415,7 @@ export function createHttpServer(deps: HttpServerDeps): RunningServer {
         error: {
           code: "no_credentials",
           message: `No credentials for provider '${model.provider}': ${auth.error}`,
+          param: "model",
           type: "authentication_error",
         },
       });
@@ -361,10 +429,31 @@ export function createHttpServer(deps: HttpServerDeps): RunningServer {
       return;
     }
 
-    const translated = translateRequest({
-      messages: parsed.messages as never,
-      tools: parsed.tools as never,
-    });
+    let translated: ReturnType<typeof translateRequest>;
+    try {
+      translated = translateRequest({
+        messages: parsed.messages as never,
+        tools: parsed.tools as never,
+      });
+    } catch (error) {
+      if (!(error instanceof RequestTranslationError)) throw error;
+      sendJson(res, 400, {
+        error: {
+          code: error.code,
+          message: error.message,
+          param: error.param,
+          type: "invalid_request_error",
+        },
+      });
+      logRequest(deps, "warn", {
+        durationMs: Date.now() - started,
+        method: "POST",
+        safeHeaders,
+        status: 400,
+        url: req.url ?? "",
+      });
+      return;
+    }
 
     const controller = new AbortController();
     inFlightAborts.add(controller);
@@ -379,6 +468,7 @@ export function createHttpServer(deps: HttpServerDeps): RunningServer {
     try {
       if (!wantsStream) {
         const result = await complete(model, translated.context, {
+          ...generationOptions,
           apiKey: auth.apiKey,
           headers: auth.headers,
           signal: controller.signal,
@@ -394,6 +484,7 @@ export function createHttpServer(deps: HttpServerDeps): RunningServer {
               message:
                 result.errorMessage ??
                 `Upstream returned ${result.stopReason} with no content`,
+              param: null,
               type:
                 result.stopReason === "aborted"
                   ? "request_aborted"
@@ -446,12 +537,18 @@ export function createHttpServer(deps: HttpServerDeps): RunningServer {
       let upstream: AssistantMessageEventStream | null = null;
       try {
         upstream = piStream(model, translated.context, {
+          ...generationOptions,
           apiKey: auth.apiKey,
           headers: auth.headers,
           signal: controller.signal,
         });
         await pipeStreamToSse(
-          { created: nowSeconds(), id, modelLabel },
+          {
+            created: nowSeconds(),
+            id,
+            includeUsage: parsed.stream_options?.include_usage === true,
+            modelLabel,
+          },
           upstream,
           sseEmitter,
         );
@@ -463,6 +560,7 @@ export function createHttpServer(deps: HttpServerDeps): RunningServer {
               ? "client_disconnected"
               : "provider_error",
             message,
+            param: null,
             type: controller.signal.aborted
               ? "request_aborted"
               : "upstream_error",
@@ -542,6 +640,38 @@ function makeSseEmitter(res: ServerResponse): SseEmitter {
   };
 }
 
+function findUnsupportedParameter(body: unknown): string | null {
+  if (!body || typeof body !== "object") return null;
+  const record = body as Record<string, unknown>;
+  for (const param of UNSUPPORTED_CHAT_PARAMETERS) {
+    if (record[param] !== undefined) return param;
+  }
+  const toolChoice = record.tool_choice;
+  if (
+    toolChoice !== undefined &&
+    toolChoice !== "auto" &&
+    toolChoice !== "none" &&
+    toolChoice !== "required"
+  ) {
+    return "tool_choice";
+  }
+  return null;
+}
+
+function buildGenerationOptions(input: {
+  max_completion_tokens?: number;
+  max_tokens?: number;
+  temperature?: number;
+  tool_choice?: unknown;
+}): ProviderStreamOptions {
+  const options: ProviderStreamOptions = {};
+  if (input.temperature !== undefined) options.temperature = input.temperature;
+  const maxTokens = input.max_completion_tokens ?? input.max_tokens;
+  if (maxTokens !== undefined) options.maxTokens = maxTokens;
+  if (input.tool_choice !== undefined) options.toolChoice = input.tool_choice;
+  return options;
+}
+
 function setCors(
   req: IncomingMessage,
   res: ServerResponse,
@@ -596,16 +726,82 @@ function pickSafeHeaders(req: IncomingMessage): Record<string, string> {
   return out;
 }
 
+function isAllowedLoopbackHost(header: string | string[] | undefined): boolean {
+  const raw = Array.isArray(header) ? header[0] : header;
+  if (!raw) return false;
+  const host = parseHostName(raw);
+  return host !== null && isLoopbackHost(host);
+}
+
+function parseHostName(raw: string): string | null {
+  const value = raw.trim().toLowerCase();
+  if (!value) return null;
+  if (value.startsWith("[")) {
+    const end = value.indexOf("]");
+    if (end === -1) return null;
+    return stripTrailingDot(value.slice(1, end));
+  }
+  const colon = value.indexOf(":");
+  const host = colon === -1 ? value : value.slice(0, colon);
+  return stripTrailingDot(host);
+}
+
+function stripTrailingDot(host: string): string {
+  return host.endsWith(".") ? host.slice(0, -1) : host;
+}
+
+class RequestBodyTooLargeError extends Error {
+  constructor(
+    readonly limitBytes: number,
+    readonly receivedBytes: number,
+  ) {
+    super(
+      `Request body exceeds ${limitBytes} bytes (${receivedBytes} received)`,
+    );
+  }
+}
+
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on("data", (chunk) => {
-      chunks.push(chunk instanceof Buffer ? chunk : Buffer.from(chunk));
-    });
-    req.on("end", () => {
+    let receivedBytes = 0;
+    let settled = false;
+
+    const cleanup = (): void => {
+      req.off("data", onData);
+      req.off("end", onEnd);
+      req.off("error", onError);
+    };
+    const settleReject = (error: Error): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const onData = (chunk: Buffer | string): void => {
+      const buffer = chunk instanceof Buffer ? chunk : Buffer.from(chunk);
+      receivedBytes += buffer.byteLength;
+      if (receivedBytes > MAX_REQUEST_BODY_BYTES) {
+        settleReject(
+          new RequestBodyTooLargeError(MAX_REQUEST_BODY_BYTES, receivedBytes),
+        );
+        return;
+      }
+      chunks.push(buffer);
+    };
+    const onEnd = (): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
       resolve(Buffer.concat(chunks).toString("utf8"));
-    });
-    req.on("error", reject);
+    };
+    const onError = (error: Error): void => {
+      settleReject(error);
+    };
+
+    req.on("data", onData);
+    req.on("end", onEnd);
+    req.on("error", onError);
   });
 }
 

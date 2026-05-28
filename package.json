@@ -67,7 +67,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "build": "node ./scripts/build-check.mjs",
-    "test": "node ./tests/smoke.mjs && node ./tests/extension-e2e.mjs && node ./tests/contract.mjs",
+    "test": "node ./tests/smoke.mjs && node ./tests/extension-e2e.mjs && node ./tests/security.mjs && node ./tests/lifecycle.mjs && node ./tests/contract.mjs",
     "check": "pnpm run lint && pnpm run typecheck && pnpm run build && pnpm test"
   },
   "pi": {

@@ -11,6 +11,7 @@ import type { Server } from "node:http";
 import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 
 import type { GatewayConfig } from "../config.js";
+import { validateGatewayConfigSecurity } from "../config.js";
 
 import { createHttpServer } from "./http-server.js";
 
@@ -37,6 +38,9 @@ export interface RunningHandle {
 export async function startServer(
   input: StartServerInput,
 ): Promise<RunningHandle> {
+  const securityError = validateGatewayConfigSecurity(input.config);
+  if (securityError) throw new Error(securityError.message);
+
   const modelRegistry =
     input.modelRegistry ?? buildDefaultRegistry(input.config.authDir);
   const log =
@@ -78,19 +82,19 @@ export async function startServer(
     throw new Error("server.address() returned null after listen");
   }
   const address = rawAddr;
+  try {
+    assertBoundAddress(address.address, input.config.bindAddress);
+  } catch (error) {
+    await closeServer(server);
+    throw error;
+  }
 
   const modelCount = modelRegistry.getAvailable().length;
 
   return {
     abortAllStreams: running.abortAllStreams,
     address,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((err) => {
-          if (err) reject(err);
-          else resolve();
-        });
-      }),
+    close: () => closeServer(server),
     modelCount,
     modelRegistry,
     server,
@@ -100,6 +104,27 @@ export async function startServer(
 export async function stopServer(handle: RunningHandle): Promise<void> {
   handle.abortAllStreams();
   await handle.close();
+}
+
+function assertBoundAddress(actual: string, expected: string): void {
+  if (
+    expected === "localhost" &&
+    (actual === "127.0.0.1" || actual === "::1")
+  ) {
+    return;
+  }
+  if (actual !== expected) {
+    throw new Error(`server bound to ${actual} but expected ${expected}`);
+  }
+}
+
+function closeServer(server: Server): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    server.close((err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
 }
 
 function buildDefaultRegistry(authDir?: string): ModelRegistry {
