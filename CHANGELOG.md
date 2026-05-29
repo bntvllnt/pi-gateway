@@ -18,6 +18,7 @@ Each released entry is linked from the matching git tag on GitHub. The release w
 
 ### Added
 
+- `pi-package` keyword in `package.json` so the package is indexed by the [pi.dev package gallery](https://pi.dev/packages), which lists only npm packages tagged with that exact keyword.
 - `CHANGELOG.md` (this file). Release workflow now extracts the version's section as the GitHub Release body.
 
 ## [0.1.0] - 2026-05-27

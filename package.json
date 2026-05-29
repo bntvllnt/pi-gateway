@@ -11,6 +11,7 @@
     "gateway",
     "llm",
     "proxy",
+    "pi-package",
     "pi",
     "pi-dev",
     "pi-extension",
