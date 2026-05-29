@@ -6,20 +6,33 @@ Each released entry is linked from the matching git tag on GitHub. The release w
 
 ## [Unreleased]
 
+### Added
+
+- Request body size cap (16 MB) — oversized `POST /v1/chat/completions` payloads return HTTP 413 (#14).
+- Loopback `Host` header validation — requests to a loopback bind with an unexpected `Host` return HTTP 403 `invalid_host`, guarding against DNS-rebinding from browser-based clients (#14).
+- HTTP server timeouts: headers 30s, request 120s, keep-alive 5s (#14).
+- Deterministic contract + E2E test coverage using pi-ai's `faux` provider; added lifecycle and security tests (#14).
+- Side-effect-labeled extension tool descriptions (`gateway_start` / `gateway_stop` note "Side effect: …"; `gateway_status` notes "Read-only") (#14).
+- `pi-package` keyword in `package.json` so the package is indexed by the [pi.dev package gallery](https://pi.dev/packages), which lists only npm packages tagged with that exact keyword.
+- `CHANGELOG.md`. The release workflow extracts the version's section as the GitHub Release body.
+
 ### Changed
 
 - Migrated pi runtime dependencies from the deprecated `@mariozechner/pi-*` namespace to `@earendil-works/pi-*` at `^0.75.4` (latest mature version under the 7-day minimum-release-age policy). No public API changes.
-- Contract test now validates the OpenAI error envelope on non-200 responses and on mid-stream error frames (which correctly omit the trailing `data: [DONE]` per OpenAI's mid-stream error convention). CI passes without provider auth.
-- Publish workflow's canary job gated on `vars.ENABLE_CANARY == 'true'`. Set via `gh variable set ENABLE_CANARY --body 'true' --repo bntvllnt/pi-gateway` once npm trusted-publisher is configured.
+- Supported OpenAI request parameters are forwarded to pi-ai; unsupported parameters (`frequency_penalty`, `presence_penalty`, `response_format`, `seed`, `stop`, `top_p`, `user`) are now rejected deterministically rather than silently ignored, so clients get an explicit error instead of unexpected output (#14).
+- Centralized config security validation (`validateGatewayConfigSecurity`) and assert the bound address after `listen()` (#14).
+- Extension daemon: log to a file, sanitize the detached child's environment, and cap the footer health-probe response body (#14).
+- Contract test validates the OpenAI error envelope on non-200 responses and on mid-stream error frames (which correctly omit the trailing `data: [DONE]` per OpenAI's mid-stream error convention). CI passes without provider auth.
+- Publish workflow's canary job gated on `vars.ENABLE_CANARY == 'true'`; enabled per push to `main` once npm trusted-publishing is configured.
 
 ### Fixed
 
+- Hardened auth/bind invariants and OpenAI error envelopes across the request path (#14, closes #6–#13).
 - Contract test no longer fails when no provider auth is configured (CI environment).
 
-### Added
+### Security
 
-- `pi-package` keyword in `package.json` so the package is indexed by the [pi.dev package gallery](https://pi.dev/packages), which lists only npm packages tagged with that exact keyword.
-- `CHANGELOG.md` (this file). Release workflow now extracts the version's section as the GitHub Release body.
+- Loopback `Host`-header guard prevents DNS-rebinding access from browser-based clients on the same machine (#14).
 
 ## [0.1.0] - 2026-05-27
 
