@@ -1,6 +1,6 @@
 {
   "name": "pi-gateway",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "OpenAI-compatible local API on top of pi.dev — LiteLLM-shape stateless protocol translator. Standalone CLI + pi-extension wrapper.",
   "keywords": [
     "openai",

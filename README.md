@@ -156,6 +156,8 @@ pi-gateway --version
 - **Non-loopback bind requires `apiKey` in the config file.** CLI flag is refused.
 - **PID lockfile** at `~/.pi/agent/gateway.pid` via atomic `O_CREAT|O_EXCL`. Single instance enforced; stale files cleaned automatically.
 - **OAuth subscriptions default-allow on loopback** (so Claude Pro / Codex work from Open WebUI), **default-deny on non-loopback** unless `--expose-oauth-subscriptions`.
+- **Loopback `Host`-header guard** — requests to a loopback bind with an unexpected `Host` return HTTP 403, blocking DNS-rebinding from browser-based clients on the same machine.
+- **Request body cap** — payloads over 16 MB return HTTP 413.
 - **Access log** redacts everything outside a hardcoded allowlist (`content-type`, `content-length`, `user-agent`, `accept`, `accept-encoding`, `host`). No `authorization` / token / key headers in logs.
 
 ## Programmatic SDK

@@ -153,7 +153,9 @@ Rules:
 
 #### Request (subset of OpenAI Chat Completions)
 
-Accepted fields: `model` (required), `messages` (required), `stream`, `stream_options`, `temperature`, `top_p`, `max_tokens`, `max_completion_tokens`, `stop`, `presence_penalty`, `frequency_penalty`, `response_format`, `seed`, `user`, `tools`, `tool_choice`, `n` (must be 1).
+Accepted fields: `model` (required), `messages` (required), `stream`, `stream_options`, `temperature`, `max_tokens`, `max_completion_tokens`, `tools`, `tool_choice`, `n` (must be 1).
+
+Rejected fields (return HTTP 400 `unsupported_parameter` so clients fail loudly rather than get silently-ignored output — not yet implemented): `frequency_penalty`, `presence_penalty`, `response_format`, `seed`, `stop`, `top_p`, `user`.
 
 `messages[].role`: `system` | `developer` | `user` | `assistant` | `tool` (Chat Completions shape).
 
@@ -238,10 +240,11 @@ Status codes:
 | HTTP | When |
 |------|------|
 | `200` | Successful Chat Completions |
-| `400` | Invalid JSON, schema mismatch, image part on non-image model, unsupported `response_format` |
+| `400` | Invalid JSON, schema mismatch, image part on non-image model, or an unsupported parameter (`unsupported_parameter` — see Rejected fields above) |
 | `401` | Missing/invalid bearer (non-loopback or `requireKeyOnLoopback: true`); no credentials for the resolved provider |
-| `403` | OAuth-subscription model requested on non-loopback without `--expose-oauth-subscriptions` |
+| `403` | OAuth-subscription model requested on non-loopback without `--expose-oauth-subscriptions`; or an unexpected `Host` header on a loopback bind (`invalid_host`, DNS-rebinding guard) |
 | `404` | Unknown model id; unknown route |
+| `413` | Request body exceeds the 16 MB cap |
 | `499` | Client disconnected (non-stream) |
 | `502` | Upstream provider errored (pi-ai returned `stopReason: "error"`) |
 

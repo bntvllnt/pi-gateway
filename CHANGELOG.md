@@ -6,6 +6,8 @@ Each released entry is linked from the matching git tag on GitHub. The release w
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-30
+
 ### Added
 
 - Request body size cap (16 MB) — oversized `POST /v1/chat/completions` payloads return HTTP 413 (#14).
@@ -50,5 +52,6 @@ Each released entry is linked from the matching git tag on GitHub. The release w
 - Project rules in `CLAUDE.md`; AI-consumption hubs in `llms.txt` + `llms-full.txt`; sibling-repo-aligned package layout (pnpm@10.28.2, `@vllnt/eslint-config`, `simple-git-hooks`, GitHub Actions CI on `pnpm run check`).
 - MIT license.
 
-[Unreleased]: https://github.com/bntvllnt/pi-gateway/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/bntvllnt/pi-gateway/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/bntvllnt/pi-gateway/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/bntvllnt/pi-gateway/releases/tag/v0.1.0
