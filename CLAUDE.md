@@ -60,6 +60,7 @@ Every HTTP response MUST satisfy:
 - Non-loopback bind requires `apiKey` in the config file. Never a CLI flag.
 - PID lockfile at `~/.pi/agent/gateway.pid`, atomic `fs.openSync(path, "wx")` (`O_CREAT|O_EXCL`). On EEXIST probe liveness with `process.kill(pid, 0)`; stale → unlink + retry once.
 - SIGINT/SIGTERM handlers registered BEFORE `listen()`. Abort in-flight pi-ai streams via `AbortSignal`. Allow up to `forceAbortTimeoutMs` (5s default) for sockets to flush.
+- Loopback binds validate the `Host` header (`invalid_host` → 403) to block DNS-rebinding from browser-based clients. Request bodies over 16 MB → 413. Server timeouts: headers 30s, request 120s, keep-alive 5s.
 - Hardcoded redaction allowlist for access-log headers: `content-type`, `content-length`, `user-agent`, `accept`, `accept-encoding`, `host`. Everything else (including `authorization`, anything matching `*token*` / `*key*` / `*secret*` case-insensitive) is omitted.
 
 ## Test gates (BLOCKING — run as `pnpm run check`)
