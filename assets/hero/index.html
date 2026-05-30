@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      *{margin:0;padding:0;box-sizing:border-box}
+      :root{
+        --bg:#000000;
+        --card:hsl(0 0% 3.9%);
+        --card-2:hsl(0 0% 7%);
+        --border:hsl(0 0% 14.9%);
+        --border-hi:hsl(0 0% 27%);
+        --fg:hsl(0 0% 98%);
+        --muted:hsl(0 0% 63.9%);
+        --faint:hsl(0 0% 40%);
+        --ring:hsl(0 0% 83.1%);
+      }
+      html,body{
+        width:1920px;height:1080px;overflow:hidden;background:var(--bg);
+        font-family:ui-sans-serif,system-ui,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+        color:var(--fg);
+      }
+      #root{position:relative;width:1920px;height:1080px;background:var(--bg)}
+      .mono{font-family:ui-monospace,monospace}
+
+      /* ===== HERO TITLE (opens centered, eases to header) ===== */
+      #hero{
+        position:absolute;left:0;right:0;top:0;
+        display:flex;flex-direction:column;align-items:center;
+        transform-origin:50% 0%;
+      }
+      #wordmark{
+        font-size:128px;font-weight:700;letter-spacing:-3px;color:var(--fg);line-height:1;
+      }
+      #wordmark .accent{color:var(--muted)}
+      #tagline{
+        margin-top:26px;font-size:44px;font-weight:400;color:var(--muted);letter-spacing:-0.5px;
+      }
+
+      /* thin divider under header */
+      #header-rule{
+        position:absolute;left:80px;right:80px;top:236px;height:1px;background:var(--border);
+        transform-origin:50% 50%;
+      }
+
+      /* ===== STAGE LABELS ===== */
+      .stage-label{
+        position:absolute;font-size:30px;font-weight:600;color:var(--faint);
+        letter-spacing:2px;text-transform:uppercase;
+      }
+      #label-clients{left:120px;top:330px;width:430px;text-align:center}
+      #label-gateway{left:760px;top:330px;width:400px;text-align:center}
+      #label-providers{left:1370px;top:330px;width:430px;text-align:center}
+
+      /* ===== LEFT: CLIENT CHIPS ===== */
+      .chip{
+        position:absolute;width:430px;left:120px;
+        background:var(--card);border:1px solid var(--border);border-radius:9999px;
+        font-size:32px;font-weight:500;color:var(--fg);
+        padding:18px 0;text-align:center;
+      }
+      #chip-0{top:402px}
+      #chip-1{top:482px}
+      #chip-2{top:562px}
+      #chip-3{top:642px}
+      #chip-4{top:722px}
+
+      /* ===== CENTER: GATEWAY HERO NODE ===== */
+      #gateway{
+        position:absolute;left:735px;top:400px;width:450px;
+        background:var(--card-2);border:1px solid var(--border-hi);border-radius:16px;
+        box-shadow:0 0 0 1px hsl(0 0% 27%), 0 0 60px hsl(0 0% 100% / 0.08);
+        padding:34px 32px;text-align:center;
+      }
+      #gateway .gw-name{font-size:46px;font-weight:700;letter-spacing:-1px;color:var(--fg)}
+      #gateway .gw-addr{
+        margin-top:18px;font-size:30px;color:var(--ring);font-weight:600;
+      }
+      #gateway .gw-ep{
+        margin-top:22px;font-size:27px;color:var(--muted);
+        background:var(--card);border:1px solid var(--border);border-radius:8px;
+        padding:11px 0;
+      }
+      #gateway .gw-ep.second{margin-top:12px}
+
+      /* ===== ROUTER: pi.dev ===== */
+      #router{
+        position:absolute;left:1370px;top:400px;width:430px;
+        background:var(--card);border:1px solid var(--border-hi);border-radius:12px;
+        padding:16px 0;text-align:center;
+      }
+      #router .r-name{font-size:38px;font-weight:700;letter-spacing:-1px;color:var(--fg)}
+      #router .r-sub{margin-top:8px;font-size:27px;color:var(--faint)}
+
+      /* ===== RIGHT: PROVIDER GRID ===== */
+      .prov{
+        position:absolute;width:206px;
+        background:var(--card);border:1px solid var(--border);border-radius:8px;
+        font-size:29px;font-weight:500;color:var(--muted);
+        padding:14px 0;text-align:center;
+      }
+      #prov-0{left:1370px;top:522px}
+      #prov-1{left:1594px;top:522px}
+      #prov-2{left:1370px;top:588px}
+      #prov-3{left:1594px;top:588px}
+      #prov-4{left:1370px;top:654px}
+      #prov-5{left:1594px;top:654px}
+
+      /* ===== RIGHT HIGHLIGHT: OAUTH SUBSCRIPTIONS ===== */
+      #oauth-wrap{
+        position:absolute;left:1370px;top:744px;width:430px;
+        background:var(--card-2);border:1px solid var(--border-hi);border-radius:12px;
+        box-shadow:0 0 0 1px hsl(0 0% 27%), 0 0 40px hsl(0 0% 100% / 0.06);
+        padding:18px 18px 20px;
+      }
+      #oauth-wrap .oauth-title{
+        font-size:26px;font-weight:600;color:var(--ring);letter-spacing:1px;
+        text-transform:uppercase;text-align:center;margin-bottom:14px;
+      }
+      .oauth-grid{display:flex;flex-wrap:wrap;gap:10px;justify-content:center}
+      .oauth-chip{
+        background:var(--card);border:1px solid var(--border-hi);border-radius:9999px;
+        font-size:26px;font-weight:600;color:var(--fg);padding:9px 18px;
+      }
+
+      /* ===== CONNECTORS (SVG) ===== */
+      #wires{position:absolute;left:0;top:0;width:1920px;height:1080px;pointer-events:none}
+
+      /* value line under everything */
+      #valueline{
+        position:absolute;left:0;right:0;top:940px;text-align:center;
+        font-size:30px;color:var(--faint);letter-spacing:0.3px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="main" data-start="0" data-duration="8" data-width="1920" data-height="1080">
+
+      <!-- CONNECTOR WIRES (behind nodes) -->
+      <svg id="wires" class="clip" data-start="0" data-duration="8" data-track-index="1" viewBox="0 0 1920 1080">
+        <!-- clients -> gateway (converge) -->
+        <line class="wire" id="wire-c0" x1="560" y1="424" x2="725" y2="470" stroke="hsl(0 0% 27%)" stroke-width="2"/>
+        <line class="wire" id="wire-c1" x1="560" y1="504" x2="725" y2="500" stroke="hsl(0 0% 27%)" stroke-width="2"/>
+        <line class="wire" id="wire-c2" x1="560" y1="584" x2="725" y2="525" stroke="hsl(0 0% 27%)" stroke-width="2"/>
+        <line class="wire" id="wire-c3" x1="560" y1="664" x2="725" y2="555" stroke="hsl(0 0% 27%)" stroke-width="2"/>
+        <line class="wire" id="wire-c4" x1="560" y1="744" x2="725" y2="585" stroke="hsl(0 0% 27%)" stroke-width="2"/>
+        <!-- gateway -> router -->
+        <line class="wire" id="wire-gr" x1="1185" y1="500" x2="1370" y2="445" stroke="hsl(0 0% 40%)" stroke-width="3"/>
+      </svg>
+
+      <!-- HEADER RULE -->
+      <div id="header-rule" class="clip" data-start="0" data-duration="8" data-track-index="2"></div>
+
+      <!-- STAGE LABELS -->
+      <div id="label-clients" class="stage-label clip" data-start="0" data-duration="8" data-track-index="3">OpenAI clients</div>
+      <div id="label-gateway" class="stage-label clip" data-start="0" data-duration="8" data-track-index="4">the gateway</div>
+      <div id="label-providers" class="stage-label clip" data-start="0" data-duration="8" data-track-index="5">pi.dev &rarr; every provider</div>
+
+      <!-- VALUE LINE -->
+      <div id="valueline" class="clip" data-start="0" data-duration="8" data-track-index="6">Point any OpenAI client at one local URL &mdash; reach every model pi can route to.</div>
+
+      <!-- LEFT CLIENT CHIPS -->
+      <div id="chip-0" class="chip clip" data-start="0" data-duration="8" data-track-index="7">Open WebUI</div>
+      <div id="chip-1" class="chip clip" data-start="0" data-duration="8" data-track-index="8">LibreChat</div>
+      <div id="chip-2" class="chip clip" data-start="0" data-duration="8" data-track-index="9">Cursor</div>
+      <div id="chip-3" class="chip clip" data-start="0" data-duration="8" data-track-index="10">Continue.dev</div>
+      <div id="chip-4" class="chip clip" data-start="0" data-duration="8" data-track-index="11">Cline</div>
+
+      <!-- PROVIDER GRID -->
+      <div id="prov-0" class="prov clip" data-start="0" data-duration="8" data-track-index="12">Anthropic</div>
+      <div id="prov-1" class="prov clip" data-start="0" data-duration="8" data-track-index="13">OpenAI</div>
+      <div id="prov-2" class="prov clip" data-start="0" data-duration="8" data-track-index="14">Google</div>
+      <div id="prov-3" class="prov clip" data-start="0" data-duration="8" data-track-index="15">Mistral</div>
+      <div id="prov-4" class="prov clip" data-start="0" data-duration="8" data-track-index="16">Bedrock</div>
+      <div id="prov-5" class="prov clip" data-start="0" data-duration="8" data-track-index="17">Vertex</div>
+
+      <!-- ROUTER -->
+      <div id="router" class="clip" data-start="0" data-duration="8" data-track-index="18">
+        <div class="r-name">pi.dev</div>
+        <div class="r-sub">multi-provider routing</div>
+      </div>
+
+      <!-- CENTER GATEWAY -->
+      <div id="gateway" class="clip" data-start="0" data-duration="8" data-track-index="19">
+        <div class="gw-name">pi-gateway</div>
+        <div class="gw-addr mono">127.0.0.1:4000</div>
+        <div class="gw-ep mono">/v1/chat/completions</div>
+        <div class="gw-ep second mono">/v1/models</div>
+      </div>
+
+      <!-- OAUTH HIGHLIGHT -->
+      <div id="oauth-wrap" class="clip" data-start="0" data-duration="8" data-track-index="20">
+        <div class="oauth-title">OAuth subscriptions</div>
+        <div class="oauth-grid">
+          <div class="oauth-chip">Claude Pro</div>
+          <div class="oauth-chip">ChatGPT Codex</div>
+          <div class="oauth-chip">GitHub Copilot</div>
+          <div class="oauth-chip">Gemini CLI</div>
+        </div>
+      </div>
+
+      <!-- HERO TITLE (on top during the open -> header transition) -->
+      <div id="hero" class="clip" data-start="0" data-duration="8" data-track-index="21">
+        <div id="wordmark">pi<span class="accent">-</span>gateway</div>
+        <div id="tagline">OpenAI-compatible local API on top of pi.dev</div>
+      </div>
+
+    </div>
+
+    <script>
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+
+      /* ---- initial hidden states ---- */
+      gsap.set("#hero", { y: 392, scale: 1.6, opacity: 0, transformOrigin: "50% 0%" });
+      gsap.set("#header-rule", { scaleX: 0, opacity: 0 });
+      gsap.set(["#label-clients", "#label-gateway", "#label-providers"], { opacity: 0, y: 12 });
+      gsap.set(".chip", { opacity: 0, x: -28 });
+      gsap.set("#gateway", { opacity: 0, scale: 0.9, transformOrigin: "50% 50%" });
+      gsap.set("#router", { opacity: 0, x: 28 });
+      gsap.set(".prov", { opacity: 0, y: 16 });
+      gsap.set("#oauth-wrap", { opacity: 0, y: 20, scale: 0.96, transformOrigin: "50% 50%" });
+      gsap.set("#valueline", { opacity: 0 });
+      gsap.set(".wire", { opacity: 0 });
+
+      /* ===== ACT 1 — poster title from black (0.15 - 1.05s, holds to 1.7) ===== */
+      tl.to("#hero", { opacity: 1, scale: 1.6, duration: 0.9, ease: "power2.out" }, 0.15);
+
+      /* ===== ACT 2 — title eases up into the header bar (1.7 - 2.65s) ===== */
+      tl.to("#hero", { y: 70, scale: 1, duration: 0.95, ease: "power3.inOut" }, 1.7);
+      tl.to("#header-rule", { scaleX: 1, opacity: 1, duration: 0.8, ease: "power2.out" }, 2.05);
+
+      /* ===== ACT 3 — diagram assembles left -> right ===== */
+      tl.to(["#label-clients", "#label-gateway", "#label-providers"],
+            { opacity: 1, y: 0, duration: 0.5, ease: "power2.out", stagger: 0.16 }, 2.45);
+
+      /* left: client chips */
+      tl.to(".chip", { opacity: 1, x: 0, duration: 0.5, ease: "power2.out", stagger: 0.09 }, 2.8);
+      /* converging wires (opacity-only fade — clean on diagonals) */
+      tl.to(["#wire-c0", "#wire-c1", "#wire-c2", "#wire-c3", "#wire-c4"],
+            { opacity: 1, duration: 0.4, ease: "power1.out", stagger: 0.07 }, 3.3);
+
+      /* center: gateway hero node */
+      tl.to("#gateway", { opacity: 1, scale: 1, duration: 0.7, ease: "power3.out" }, 3.7);
+
+      /* gateway -> router wire */
+      tl.to("#wire-gr", { opacity: 1, duration: 0.45, ease: "power1.out" }, 4.3);
+      /* router */
+      tl.to("#router", { opacity: 1, x: 0, duration: 0.6, ease: "power2.out" }, 4.55);
+
+      /* right: providers fill in */
+      tl.to(".prov", { opacity: 1, y: 0, duration: 0.45, ease: "power2.out", stagger: 0.07 }, 4.9);
+
+      /* ===== ACT 4 — payoff: OAuth subscriptions + value line ===== */
+      tl.to("#oauth-wrap", { opacity: 1, y: 0, scale: 1, duration: 0.7, ease: "power3.out" }, 5.45);
+      tl.to("#valueline", { opacity: 1, duration: 0.6, ease: "power2.out" }, 5.85);
+
+      /* ===== HOLD the assembled diagram (6.45 - 7.6s) then fade to black for a seamless loop ===== */
+      tl.to("#root", { opacity: 0, duration: 0.4, ease: "power2.in" }, 7.6);
+
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>

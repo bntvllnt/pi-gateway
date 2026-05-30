@@ -4,6 +4,10 @@
 [![CI](https://github.com/bntvllnt/pi-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/bntvllnt/pi-gateway/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
+<p align="center">
+  <img src="assets/pi-gateway-hero.gif" alt="pi-gateway: point any OpenAI client at one local URL (127.0.0.1:4000) and reach every model pi can route to — Anthropic, OpenAI, Google, Mistral, Bedrock, Vertex, plus OAuth subscriptions like Claude Pro, ChatGPT Codex, GitHub Copilot, and Gemini CLI" width="100%">
+</p>
+
 > **OpenAI-compatible local API on top of [pi.dev](https://github.com/badlogic/pi-mono).**
 > LiteLLM-shape stateless protocol translator. Re-exposes every model `pi` can reach (Anthropic, OpenAI, Google, Mistral, Bedrock, Vertex, **plus OAuth subscriptions** like Claude Pro / ChatGPT Codex / GitHub Copilot / Gemini CLI) through `POST /v1/chat/completions` + `GET /v1/models`, so Open WebUI / LibreChat / Cursor / Continue.dev / Cline can use them without re-entering credentials.
 

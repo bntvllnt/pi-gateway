@@ -6,6 +6,10 @@ Each released entry is linked from the matching git tag on GitHub. The release w
 
 ## [Unreleased]
 
+### Added
+
+- README hero GIF (`assets/pi-gateway-hero.gif`) presenting what pi-gateway is at a glance — point any OpenAI client at one local URL and reach every model pi can route to, including OAuth subscriptions (Claude Pro / ChatGPT Codex / GitHub Copilot / Gemini CLI). Dark-theme [hyperframes](https://hyperframes.heygen.com) composition styled with [`@vllnt/ui`](https://www.npmjs.com/package/@vllnt/ui) monochrome tokens; regenerable source + instructions in `assets/hero/`.
+
 ## [0.2.0] - 2026-05-30
 
 ### Added
