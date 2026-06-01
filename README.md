@@ -1,5 +1,9 @@
 # pi-gateway
 
+<p align="center">
+  <img src="assets/pi-gateway-hero.gif" alt="pi-gateway: point any OpenAI client at one local URL (127.0.0.1:4000) and reach every model pi can route to — Anthropic, OpenAI, Google, Mistral, Bedrock, Vertex, plus OAuth subscriptions like Claude Pro, ChatGPT Codex, GitHub Copilot, and Gemini CLI" width="100%">
+</p>
+
 [![npm version](https://img.shields.io/npm/v/pi-gateway.svg)](https://www.npmjs.com/package/pi-gateway)
 [![CI](https://github.com/bntvllnt/pi-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/bntvllnt/pi-gateway/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)

@@ -6,6 +6,10 @@ Each released entry is linked from the matching git tag on GitHub. The release w
 
 ## [Unreleased]
 
+### Added
+
+- README hero GIF (`assets/pi-gateway-hero.gif`, first image at the top) presenting what pi-gateway is at a glance — animated request flow shows packets travelling from any OpenAI client (Open WebUI / LibreChat / Cursor / Continue.dev / Cline) through the gateway at `127.0.0.1:4000`, on to `pi.dev`, and out to every provider (Anthropic, OpenAI, Google, Mistral, Bedrock, Vertex) including OAuth subscriptions (Claude Pro / ChatGPT Codex / GitHub Copilot / Gemini CLI), with directional arrowheads at each hop. Dark-theme [hyperframes](https://hyperframes.heygen.com) composition styled with [`@vllnt/ui`](https://www.npmjs.com/package/@vllnt/ui) monochrome tokens; regenerable source + instructions in `assets/hero/`.
+
 ## [0.2.0] - 2026-05-30
 
 ### Added
